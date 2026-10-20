@@ -1,0 +1,38 @@
+# === Go 构建产物 ===
+/tempo
+/tempo.exe
+*.exe
+*.test
+*.out
+
+# === Go 工作区与依赖缓存（通常不提交） ===
+go.work
+go.work.sum
+
+# === 交叉编译产物 ===
+/dist/
+/build/
+/bin/
+
+# === 编辑器与 IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === 操作系统杂项 ===
+.DS_Store
+Thumbs.db
+
+# === aider 本地状态 ===
+.aider.*
+.litellm*
+
+# === 日志与运行时产物 ===
+*.log
+/tmp/
+
+# === 需求文档（不纳入版本库） ===
+docs/PRD.md
+docs/CONTEXT.md
