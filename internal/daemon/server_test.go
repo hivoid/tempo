@@ -12,12 +12,16 @@ import (
 	"testing"
 
 	"tempo/internal/protocol"
+	"tempo/internal/transport"
 )
 
-// startTestServer 在临时路径上启动监听，并把每条连接交给 handleConn 处理，返回 socket 路径。
+// startTestServer 启动监听并把每条连接交给 handleConn 处理，返回 socket 路径。
+// 通过设置 XDG_RUNTIME_DIR 使 transport.NewServer() 在本测试的临时目录内创建 socket，
+// 避免与真实 daemon 或其他测试冲突。
 func startTestServer(t *testing.T, m *Manager) string {
 	t.Helper()
-	srv := &unixServer{path: filepath.Join(t.TempDir(), "test.sock")}
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	srv := transport.NewServer()
 	if err := srv.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -32,7 +36,7 @@ func startTestServer(t *testing.T, m *Manager) string {
 			go handleConn(m, conn)
 		}
 	}()
-	return srv.path
+	return srv.Address()
 }
 
 // exchange 向 daemon 发送一行 JSON 请求并读取一行 JSON 响应。
