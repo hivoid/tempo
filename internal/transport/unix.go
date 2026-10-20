@@ -27,11 +27,12 @@ type unixServer struct {
 
 // NewServer 创建 Linux 平台的 IPC Server。
 func NewServer() Server {
-	return &unixServer{path: socketPath()}
+	return &unixServer{path: SocketPath()}
 }
 
-// socketPath 返回 socket 文件路径：优先 $XDG_RUNTIME_DIR，为空时回退系统临时目录。
-func socketPath() string {
+// SocketPath 返回 socket 文件路径：优先 $XDG_RUNTIME_DIR，为空时回退系统临时目录。
+// 导出供 CLI 客户端复用，保证 daemon 与客户端使用同一地址。
+func SocketPath() string {
 	dir := os.Getenv("XDG_RUNTIME_DIR")
 	if dir == "" {
 		dir = os.TempDir()
