@@ -5,7 +5,6 @@ package notify
 import (
 	"fmt"
 	"os/exec"
-	"strconv"
 	"time"
 )
 
@@ -18,17 +17,15 @@ func NewNotifier() Notifier {
 }
 
 // Notify 执行 notify-send -u normal -t <ms> title message。
-// duration 为建议显示时长，<=0 时使用 10 秒默认值。
+// duration 为建议显示时长，<=0 时省略 -t 参数。
 func (n *linuxNotifier) Notify(title, message string, duration time.Duration) error {
-	ms := duration.Milliseconds()
-	if ms <= 0 {
-		ms = 10000
+	args := []string{"-u", "normal"}
+	if duration > 0 {
+		args = append(args, "-t", fmt.Sprintf("%d", duration.Milliseconds()))
 	}
-	cmd := exec.Command("notify-send",
-		"-u", "normal",
-		"-t", strconv.FormatInt(ms, 10),
-		title, message,
-	)
+	args = append(args, title, message)
+
+	cmd := exec.Command("notify-send", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("notify-send: %w: %s", err, string(out))
 	}
