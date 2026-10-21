@@ -46,9 +46,9 @@ cp tempo ~/.local/bin/
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/tempo-daemon.service ~/.config/systemd/user/
+cp contrib/tempo.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now tempo-daemon
+systemctl --user enable --now tempo
 ```
 
 The unit binds the daemon to the graphical session (`graphical-session.target`), so it starts and stops with your desktop session and restarts automatically on failure. `ExecStart` expects the binary at `~/.local/bin/tempo`; adjust it if you installed the binary elsewhere. On headless machines (tty / SSH only), replace `graphical-session.target` with `default.target`.
@@ -56,8 +56,8 @@ The unit binds the daemon to the graphical session (`graphical-session.target`),
 Check status and follow the logs:
 
 ```bash
-systemctl --user status tempo-daemon
-journalctl --user -u tempo-daemon -f
+systemctl --user status tempo
+journalctl --user -u tempo -f
 ```
 
 **Windows**:
@@ -200,7 +200,7 @@ tempo/
 │   ├── notify/                        Desktop notifications (notify-send / Toast / MessageBoxW)
 │   └── platform/                      Platform hosting (systemd / Windows Service)
 └── contrib/
-    └── tempo-daemon.service  Linux systemd unit
+    └── tempo.service  Linux systemd unit
 ```
 
 ## Development

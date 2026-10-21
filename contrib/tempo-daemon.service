@@ -2,9 +2,9 @@
 #
 # 安装（与 `tempo install-service` 在 Linux 上的提示一致）：
 #   mkdir -p ~/.config/systemd/user
-#   cp contrib/tempo-daemon.service ~/.config/systemd/user/
+#   cp contrib/tempo.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now tempo-daemon.service
+#   systemctl --user enable --now tempo.service
 #
 # ExecStart 默认指向 ~/.local/bin/tempo，若安装在其他位置请相应修改。
 # 无图形会话的环境（纯 tty / SSH）可将下方 graphical-session.target

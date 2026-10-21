@@ -46,9 +46,9 @@ cp tempo ~/.local/bin/
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/tempo-daemon.service ~/.config/systemd/user/
+cp contrib/tempo.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now tempo-daemon
+systemctl --user enable --now tempo
 ```
 
 单元将 daemon 绑定到图形会话（`graphical-session.target`），服务随桌面会话启停，异常退出时自动重启。`ExecStart` 默认指向 `~/.local/bin/tempo`，如二进制安装在其他位置请相应修改。无图形会话的环境（纯 tty / SSH）可将 `graphical-session.target` 替换为 `default.target`。
@@ -56,8 +56,8 @@ systemctl --user enable --now tempo-daemon
 查看服务状态与日志：
 
 ```bash
-systemctl --user status tempo-daemon
-journalctl --user -u tempo-daemon -f
+systemctl --user status tempo
+journalctl --user -u tempo -f
 ```
 
 **Windows**：
@@ -201,7 +201,7 @@ tempo/
 │   ├── notify/                        桌面提醒（notify-send / Toast / MessageBoxW）
 │   └── platform/                      平台托管（systemd / Windows Service）
 └── contrib/
-    └── tempo-daemon.service  Linux systemd unit
+    └── tempo.service  Linux systemd unit
 ```
 
 ## 开发

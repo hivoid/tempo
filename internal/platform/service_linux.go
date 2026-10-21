@@ -25,8 +25,8 @@ func RunAsService(name string, run func() error) error {
 func InstallService(name, displayName, exePath string) error {
 	fmt.Println("Linux 平台请手动安装 systemd 用户服务：")
 	fmt.Println("  1. mkdir -p ~/.config/systemd/user")
-	fmt.Println("  2. cp contrib/tempo-daemon.service ~/.config/systemd/user/")
+	fmt.Println("  2. cp contrib/tempo.service ~/.config/systemd/user/")
 	fmt.Println("  3. systemctl --user daemon-reload")
-	fmt.Println("  4. systemctl --user enable --now tempo-daemon.service")
+	fmt.Println("  4. systemctl --user enable --now tempo.service")
 	return nil
 }
