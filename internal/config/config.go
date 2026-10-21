@@ -25,47 +25,59 @@ type Rule struct {
 	FinishOn      string        // FinishOnEach | FinishOnSequence，缺省为 FinishOnEach
 }
 
-// Pomodoro 是 [pomodoro] 段的全局默认参数；零值表示未设置，由调用方回退到 DefaultPomodoro。
-type Pomodoro struct {
-	Work       time.Duration // 专注时长
-	ShortBreak time.Duration // 短休时长
-	LongBreak  time.Duration // 长休时长
-	Cycle      int           // 长休前的专注次数
-}
-
-// Config 是 rules.toml 的内存表示。
-type Config struct {
-	Rules    map[string]Rule // 预置规则，按名称索引
-	Pomodoro Pomodoro        // 番茄钟全局默认参数
-}
-
-// DefaultPomodoro 返回番茄钟的内置默认参数（PRD F16）。
-func DefaultPomodoro() Pomodoro {
-	return Pomodoro{
-		Work:       25 * time.Minute,
-		ShortBreak: 5 * time.Minute,
-		LongBreak:  15 * time.Minute,
-		Cycle:      4,
-	}
-}
-
-// rawXxx 系列用于 TOML 反序列化；时长保持字符串以便统一校验解析错误。
-type rawRule struct {
-	Duration      string `toml:"duration"`
-	FinishCommand string `toml:"finish_command"`
-	FinishOn      string `toml:"finish_on"`
-}
-
-type rawPomodoro struct {
+// PomodoroConfig 是 [pomodoro] 段的原始 TOML 表示；时长保持字符串，
+// 由 (*Config).PomodoroDefaults 统一解析，解析失败时回退内置默认值。
+type PomodoroConfig struct {
 	Work       string `toml:"work"`
 	ShortBreak string `toml:"short_break"`
 	LongBreak  string `toml:"long_break"`
 	Cycle      int    `toml:"cycle"`
 }
 
+// Config 是 rules.toml 的内存表示。
+type Config struct {
+	Rules    map[string]Rule // 预置规则，按名称索引
+	Pomodoro PomodoroConfig  // 番茄钟全局默认参数，经 PomodoroDefaults 解析
+}
+
+// DefaultPomodoro 返回番茄钟的内置默认参数（PRD F16）：
+// 专注 25m、短休 5m、长休 15m、每 4 个专注后长休。
+func DefaultPomodoro() (work, short, long time.Duration, cycle int) {
+	return 25 * time.Minute, 5 * time.Minute, 15 * time.Minute, 4
+}
+
+// PomodoroDefaults 把 [pomodoro] 段的全局默认参数解析为时长后返回：
+// 时长字段为空、非法或非正，或 cycle 非正时，回退到 DefaultPomodoro 的内置默认值。
+func (c *Config) PomodoroDefaults() (work, short, long time.Duration, cycle int) {
+	defWork, defShort, defLong, defCycle := DefaultPomodoro()
+	work = parseDurationOr(c.Pomodoro.Work, defWork)
+	short = parseDurationOr(c.Pomodoro.ShortBreak, defShort)
+	long = parseDurationOr(c.Pomodoro.LongBreak, defLong)
+	cycle = c.Pomodoro.Cycle
+	if cycle <= 0 {
+		cycle = defCycle
+	}
+	return work, short, long, cycle
+}
+
+// parseDurationOr 解析时长字符串；为空、非法或非正值时返回 fallback。
+func parseDurationOr(raw string, fallback time.Duration) time.Duration {
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
+	}
+	return fallback
+}
+
+// rawRule 用于 TOML 反序列化；时长保持字符串以便统一校验解析错误。
+type rawRule struct {
+	Duration      string `toml:"duration"`
+	FinishCommand string `toml:"finish_command"`
+	FinishOn      string `toml:"finish_on"`
+}
+
 type rawConfig struct {
 	Rules    map[string]rawRule `toml:"rules"`
-	Pomodoro rawPomodoro        `toml:"pomodoro"`
+	Pomodoro PomodoroConfig     `toml:"pomodoro"`
 }
 
 // Load 从 path 读取 TOML 配置并解析。文件不存在时返回空配置而非错误。
@@ -82,27 +94,9 @@ func Load(path string) (*Config, error) {
 
 // toConfig 将 TOML 中间结构转换为 Config，并校验时长与 finish_on 取值。
 func (r rawConfig) toConfig() (*Config, error) {
-	work, err := parsePomodoroDuration("work", r.Pomodoro.Work)
-	if err != nil {
-		return nil, err
-	}
-	shortBreak, err := parsePomodoroDuration("short_break", r.Pomodoro.ShortBreak)
-	if err != nil {
-		return nil, err
-	}
-	longBreak, err := parsePomodoroDuration("long_break", r.Pomodoro.LongBreak)
-	if err != nil {
-		return nil, err
-	}
-
 	cfg := &Config{
-		Rules: make(map[string]Rule, len(r.Rules)),
-		Pomodoro: Pomodoro{
-			Work:       work,
-			ShortBreak: shortBreak,
-			LongBreak:  longBreak,
-			Cycle:      r.Pomodoro.Cycle,
-		},
+		Rules:    make(map[string]Rule, len(r.Rules)),
+		Pomodoro: r.Pomodoro,
 	}
 
 	for name, rr := range r.Rules {
@@ -125,16 +119,4 @@ func (r rawConfig) toConfig() (*Config, error) {
 		}
 	}
 	return cfg, nil
-}
-
-// parsePomodoroDuration 解析 [pomodoro] 段中的单个时长字段，空字符串视为未设置。
-func parsePomodoroDuration(name, raw string) (time.Duration, error) {
-	if raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("pomodoro.%s: 解析时长 %q: %w", name, raw, err)
-	}
-	return d, nil
 }

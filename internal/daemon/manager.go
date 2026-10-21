@@ -14,17 +14,15 @@ import (
 	"tempo/internal/protocol"
 )
 
-// errNotImplemented 表示番茄钟功能尚未实现，下一阶段补全。
-var errNotImplemented = errors.New("not implemented")
-
 // Manager 管理所有活动计时任务，所有方法并发安全。
 type Manager struct {
 	mu sync.Mutex
 
-	cfg      *config.Config
-	notifier notify.Notifier
-	logger   *slog.Logger
-	tasks    map[string]*Task
+	cfg        *config.Config
+	notifier   notify.Notifier
+	logger     *slog.Logger
+	tasks      map[string]*Task
+	pomodoros  map[string]*PomodoroTracker
 }
 
 // NewManager 创建任务管理器。cfg、notifier、logger 由调用方注入：
@@ -38,10 +36,11 @@ func NewManager(cfg *config.Config, notifier notify.Notifier, logger *slog.Logge
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Manager{
-		cfg:      cfg,
-		notifier: notifier,
-		logger:   logger,
-		tasks:    make(map[string]*Task),
+		cfg:       cfg,
+		notifier:  notifier,
+		logger:    logger,
+		tasks:     make(map[string]*Task),
+		pomodoros: make(map[string]*PomodoroTracker),
 	}
 }
 
@@ -91,7 +90,7 @@ func (m *Manager) Start(name, rule, duration, finishCmd string) error {
 	m.tasks[name] = t
 	m.mu.Unlock()
 
-	m.logger.Info("任务已创建", "task", name, "rule", rule, "action", "start")
+	m.logger.Info("任务已创建", "task", name, "rule", rule, "duration", d, "finish", finishCmd, "action", "start")
 	return nil
 }
 
@@ -103,7 +102,7 @@ func (m *Manager) onTaskFinish(t *Task) {
 	delete(m.tasks, t.name)
 	m.mu.Unlock()
 
-	m.logger.Info("任务计时结束", "task", t.name, "rule", t.rule, "action", "finish")
+	m.logger.Info("任务计时结束", "task", t.name, "rule", t.rule, "trigger", "timer", "action", "finish")
 
 	if m.notifier == nil {
 		return
@@ -161,18 +160,31 @@ func (m *Manager) Resume(name string) error {
 }
 
 // Stop 按名称停止并移除任务（PRD F6）。重复停止已结束的任务同样视为成功移除。
+// 番茄钟阶段任务与序列同名（F20）：若名称同时命中某个番茄钟序列，则在停止
+// 当前阶段任务之外一并终止整个序列并将其从注册表移除（F19）。
 func (m *Manager) Stop(name string) error {
 	m.mu.Lock()
 	t, ok := m.tasks[name]
 	if ok {
 		delete(m.tasks, name)
 	}
+	p, isPomo := m.pomodoros[name]
+	if isPomo {
+		delete(m.pomodoros, name)
+	}
 	m.mu.Unlock()
-	if !ok {
+
+	if !ok && !isPomo {
 		return fmt.Errorf("任务 %s 不存在", name)
 	}
-	t.Stop()
-	m.logger.Info("任务已停止", "task", name, "action", "stop")
+	if ok {
+		t.Stop()
+		m.logger.Info("任务已停止", "task", name, "trigger", "manual", "action", "stop")
+	}
+	if isPomo {
+		// tracker.Stop 内部完成序列停止日志与 sequence 模式的 finish_command。
+		p.Stop()
+	}
 	return nil
 }
 
@@ -184,9 +196,9 @@ func (m *Manager) lookup(name string) (*Task, bool) {
 	return t, ok
 }
 
-// PomodoroOptions 描述番茄钟序列参数。
-// 注意：当前临时定义于本文件以支撑占位方法签名，
-// 下一阶段实现 pomodoro.go 时将迁移到该文件并删除此处定义。
+// PomodoroOptions 描述番茄钟序列参数。零值字段与 FinishOn 的缺省值由
+// PomodoroTracker.fillDefaults 在构造时按「显式传入 > 全局 [pomodoro] 配置 >
+// PRD 默认值」补全。
 type PomodoroOptions struct {
 	Work       time.Duration // 专注时长
 	ShortBreak time.Duration // 短休时长
@@ -196,19 +208,67 @@ type PomodoroOptions struct {
 	FinishOn   string        // "each" | "sequence"，控制自定义命令执行时机
 }
 
-// PomodoroStart 启动番茄钟序列，自动在专注/短休/长休间切换（PRD F15）。下一阶段实现。
+// PomodoroStart 启动番茄钟序列，自动在专注/短休/长休间切换（PRD F15）。
+// 序列名同时作为各阶段任务名注册到 tasks，用户可直接对当前阶段执行
+// pause/resume/stop（F20）；与已有任务或番茄钟重名时返回错误。
 func (m *Manager) PomodoroStart(name string, opts PomodoroOptions) error {
-	return errNotImplemented
+	if name == "" {
+		return errors.New("番茄钟名称不能为空")
+	}
+
+	m.mu.Lock()
+	if _, exists := m.tasks[name]; exists {
+		m.mu.Unlock()
+		return fmt.Errorf("任务 %s 已存在", name)
+	}
+	if _, exists := m.pomodoros[name]; exists {
+		m.mu.Unlock()
+		return fmt.Errorf("番茄钟 %s 已存在", name)
+	}
+	m.mu.Unlock()
+
+	// 不持 m.mu 创建：newPomodoroTracker 会立即启动第一阶段任务并加锁注册进
+	// tasks，持锁调用会与 startStage 内的加锁顺序相互死锁。
+	p := newPomodoroTracker(name, opts, m)
+
+	m.mu.Lock()
+	m.pomodoros[name] = p
+	m.mu.Unlock()
+
+	m.logger.Info("番茄钟已启动",
+		"task", name,
+		"rule", p.opts.Rule,
+		"phase", phaseWork,
+		"action", "pomodoro_start")
+	return nil
 }
 
-// PomodoroStatus 返回番茄钟当前阶段与周期进度（PRD F18）。下一阶段实现。
+// PomodoroStatus 返回指定番茄钟的当前阶段与周期进度（PRD F18）。
 func (m *Manager) PomodoroStatus(name string) (*protocol.PomodoroInfo, error) {
-	return nil, errNotImplemented
+	m.mu.Lock()
+	p, ok := m.pomodoros[name]
+	m.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("番茄钟 %s 不存在", name)
+	}
+	info := p.Status()
+	return &info, nil
 }
 
-// PomodoroStop 终止整个番茄钟序列并停止当前阶段任务（PRD F19）。下一阶段实现。
+// PomodoroStop 终止整个番茄钟序列并停止当前阶段任务（PRD F19）。
+// 序列停止日志与 sequence 模式的 finish_command 由 PomodoroTracker.Stop 处理。
 func (m *Manager) PomodoroStop(name string) error {
-	return errNotImplemented
+	m.mu.Lock()
+	p, ok := m.pomodoros[name]
+	if ok {
+		delete(m.pomodoros, name)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("番茄钟 %s 不存在", name)
+	}
+	p.Stop()
+	return nil
 }
 
 // formatRemaining 将剩余时长四舍五入到秒并格式化为人类可读形式（如 "24m30s"），负值钳制为 0。

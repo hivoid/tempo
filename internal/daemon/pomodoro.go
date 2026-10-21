@@ -46,19 +46,16 @@ func newPomodoroTracker(name string, opts PomodoroOptions, mgr *Manager) *Pomodo
 }
 
 // fillDefaults 补全序列参数，优先级：显式传入 > 全局 [pomodoro] 配置 > PRD 默认值
-// （F16/F17）；FinishOn 空值或非法值一律按缺省 each 处理（F21）。
+// （F16/F17，后两级由 Config.PomodoroDefaults 统一解析与兜底）；
+// FinishOn 空值或非法值一律按缺省 each 处理（F21）。
 func (p *PomodoroTracker) fillDefaults() {
-	def := config.DefaultPomodoro()
-	global := p.mgr.cfg.Pomodoro
+	work, short, long, cycle := p.mgr.cfg.PomodoroDefaults()
 
-	p.opts.Work = firstPositive(p.opts.Work, global.Work, def.Work)
-	p.opts.ShortBreak = firstPositive(p.opts.ShortBreak, global.ShortBreak, def.ShortBreak)
-	p.opts.LongBreak = firstPositive(p.opts.LongBreak, global.LongBreak, def.LongBreak)
+	p.opts.Work = firstPositive(p.opts.Work, work)
+	p.opts.ShortBreak = firstPositive(p.opts.ShortBreak, short)
+	p.opts.LongBreak = firstPositive(p.opts.LongBreak, long)
 	if p.opts.Cycle <= 0 {
-		p.opts.Cycle = global.Cycle
-	}
-	if p.opts.Cycle <= 0 {
-		p.opts.Cycle = def.Cycle
+		p.opts.Cycle = cycle
 	}
 	if p.opts.FinishOn != config.FinishOnSequence {
 		p.opts.FinishOn = config.FinishOnEach

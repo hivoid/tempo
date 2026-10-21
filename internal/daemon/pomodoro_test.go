@@ -75,12 +75,12 @@ func TestPomodoroStartsInWorkPhase(t *testing.T) {
 
 // TestPomodoroFillDefaults 验证参数补全优先级：显式传入 > 全局配置 > PRD 默认值。
 func TestPomodoroFillDefaults(t *testing.T) {
-	def := config.DefaultPomodoro()
+	defWork, defShort, defLong, defCycle := config.DefaultPomodoro()
 
 	m := NewManager(nil, nil, nil)
 	p := newPomodoroTracker("p1", PomodoroOptions{}, m)
-	if p.opts.Work != def.Work || p.opts.ShortBreak != def.ShortBreak ||
-		p.opts.LongBreak != def.LongBreak || p.opts.Cycle != def.Cycle {
+	if p.opts.Work != defWork || p.opts.ShortBreak != defShort ||
+		p.opts.LongBreak != defLong || p.opts.Cycle != defCycle {
 		t.Errorf("空参数应回退 PRD 默认值: %+v", p.opts)
 	}
 	if p.opts.FinishOn != config.FinishOnEach {
@@ -89,8 +89,8 @@ func TestPomodoroFillDefaults(t *testing.T) {
 	p.Stop()
 
 	cfg := &config.Config{
-		Pomodoro: config.Pomodoro{
-			Work: time.Minute, ShortBreak: 2 * time.Minute, LongBreak: 3 * time.Minute, Cycle: 3,
+		Pomodoro: config.PomodoroConfig{
+			Work: "1m", ShortBreak: "2m", LongBreak: "3m", Cycle: 3,
 		},
 	}
 	m2 := NewManager(cfg, nil, nil)
@@ -100,6 +100,18 @@ func TestPomodoroFillDefaults(t *testing.T) {
 		t.Errorf("应回退全局 [pomodoro] 配置: %+v", p2.opts)
 	}
 	p2.Stop()
+
+	// 时长非法或 cycle 非正时，[pomodoro] 配置回退 PRD 默认值而非报错。
+	cfgBad := &config.Config{
+		Pomodoro: config.PomodoroConfig{Work: "abc", ShortBreak: "0s", Cycle: -1},
+	}
+	m3 := NewManager(cfgBad, nil, nil)
+	p3 := newPomodoroTracker("p3", PomodoroOptions{}, m3)
+	if p3.opts.Work != defWork || p3.opts.ShortBreak != defShort ||
+		p3.opts.LongBreak != defLong || p3.opts.Cycle != defCycle {
+		t.Errorf("非法配置应回退 PRD 默认值: %+v", p3.opts)
+	}
+	p3.Stop()
 }
 
 // TestPomodoroWorkToShortBreak 验证专注正常完成后进入短休、completed 递增，

@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"bytes"
-	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -22,6 +21,9 @@ func TestNewManagerDefaults(t *testing.T) {
 	}
 	if m.tasks == nil {
 		t.Error("tasks map 应已初始化")
+	}
+	if m.pomodoros == nil {
+		t.Error("pomodoros map 应已初始化")
 	}
 }
 
@@ -186,16 +188,96 @@ func TestTaskRemovedOnFinish(t *testing.T) {
 	t.Fatal("计时结束后任务应被移除")
 }
 
-func TestPomodoroNotImplemented(t *testing.T) {
+// TestPomodoroStartRegistersStageTask 验证启动番茄钟后以序列名注册运行中的阶段任务。
+func TestPomodoroStartRegistersStageTask(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.PomodoroStart("p", PomodoroOptions{}); !errors.Is(err, errNotImplemented) {
-		t.Errorf("PomodoroStart 应返回 errNotImplemented，得到: %v", err)
+	t.Cleanup(func() { _ = m.PomodoroStop("focus") })
+
+	if err := m.PomodoroStart("focus", PomodoroOptions{Work: time.Second}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
 	}
-	if _, err := m.PomodoroStatus("p"); !errors.Is(err, errNotImplemented) {
-		t.Errorf("PomodoroStatus 应返回 errNotImplemented，得到: %v", err)
+	waitForTasks(t, m, 1, time.Second)
+	if tasks := m.List(); tasks[0].Name != "focus" || tasks[0].State != "running" {
+		t.Errorf("阶段任务应以序列名注册: %+v", tasks)
 	}
-	if err := m.PomodoroStop("p"); !errors.Is(err, errNotImplemented) {
-		t.Errorf("PomodoroStop 应返回 errNotImplemented，得到: %v", err)
+}
+
+// TestPomodoroStartRejectsDuplicateNames 验证与已有任务或其他番茄钟重名时报错。
+func TestPomodoroStartRejectsDuplicateNames(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	if err := m.Start("tea", "", "10s", ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Stop("tea") })
+
+	if err := m.PomodoroStart("", PomodoroOptions{}); err == nil {
+		t.Error("空名称应报错")
+	}
+	if err := m.PomodoroStart("tea", PomodoroOptions{}); err == nil || !strings.Contains(err.Error(), "已存在") {
+		t.Errorf("与已有任务重名应报错，得到: %v", err)
+	}
+
+	if err := m.PomodoroStart("focus", PomodoroOptions{Work: time.Second}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
+	}
+	t.Cleanup(func() { _ = m.PomodoroStop("focus") })
+	if err := m.PomodoroStart("focus", PomodoroOptions{}); err == nil || !strings.Contains(err.Error(), "已存在") {
+		t.Errorf("重复启动同名番茄钟应报错，得到: %v", err)
+	}
+}
+
+// TestPomodoroStatusAndStopLifecycle 验证 status/stop 的正常路径与不存在时的错误。
+func TestPomodoroStatusAndStopLifecycle(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	if _, err := m.PomodoroStatus("ghost"); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Errorf("不存在的番茄钟 status 应报错，得到: %v", err)
+	}
+	if err := m.PomodoroStop("ghost"); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Errorf("不存在的番茄钟 stop 应报错，得到: %v", err)
+	}
+
+	if err := m.PomodoroStart("focus", PomodoroOptions{Work: time.Minute}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
+	}
+	info, err := m.PomodoroStatus("focus")
+	if err != nil {
+		t.Fatalf("PomodoroStatus: %v", err)
+	}
+	if info.Phase != phaseWork || info.Completed != 0 || info.Cycle != 4 {
+		t.Errorf("PomodoroInfo = %+v, want phase=work completed=0 cycle=4", info)
+	}
+
+	if err := m.PomodoroStop("focus"); err != nil {
+		t.Fatalf("PomodoroStop: %v", err)
+	}
+	if tasks := m.List(); len(tasks) != 0 {
+		t.Errorf("停止后应无阶段任务: %+v", tasks)
+	}
+	if _, err := m.PomodoroStatus("focus"); err == nil {
+		t.Error("停止后 status 应报错")
+	}
+	if err := m.PomodoroStop("focus"); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Errorf("重复停止应报错，得到: %v", err)
+	}
+}
+
+// TestStopStageTaskTerminatesSequence 验证按阶段任务名 stop 会连带终止整个序列（F19/F20）。
+func TestStopStageTaskTerminatesSequence(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	if err := m.PomodoroStart("focus", PomodoroOptions{Work: time.Minute}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
+	}
+	waitForTasks(t, m, 1, time.Second)
+
+	if err := m.Stop("focus"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if tasks := m.List(); len(tasks) != 0 {
+		t.Errorf("停止后应无阶段任务: %+v", tasks)
+	}
+	if _, err := m.PomodoroStatus("focus"); err == nil {
+		t.Error("停止阶段任务应连带终止番茄钟序列")
 	}
 }
 
