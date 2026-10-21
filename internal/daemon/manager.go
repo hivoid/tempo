@@ -271,6 +271,19 @@ func (m *Manager) PomodoroStop(name string) error {
 	return nil
 }
 
+// PomodoroNames 返回所有活动番茄钟序列的名称，按名称排序。
+// 供 IPC 层在 CLI 未指定名称时解析唯一活动序列。
+func (m *Manager) PomodoroNames() []string {
+	m.mu.Lock()
+	names := make([]string, 0, len(m.pomodoros))
+	for name := range m.pomodoros {
+		names = append(names, name)
+	}
+	m.mu.Unlock()
+	sort.Strings(names)
+	return names
+}
+
 // formatRemaining 将剩余时长四舍五入到秒并格式化为人类可读形式（如 "24m30s"），负值钳制为 0。
 func formatRemaining(d time.Duration) string {
 	if d < 0 {

@@ -132,13 +132,6 @@ func TestDispatchErrors(t *testing.T) {
 		t.Errorf("空名称 start 应失败，得到: %+v", resp)
 	}
 
-	for _, action := range []string{protocol.ActionPomodoroStart, protocol.ActionPomodoroStatus, protocol.ActionPomodoroStop} {
-		resp := dispatch(m, protocol.Request{Action: action, Name: "p"})
-		if resp.OK || resp.Error != "pomodoro not implemented yet" {
-			t.Errorf("%s 应返回未实现错误，得到: %+v", action, resp)
-		}
-	}
-
 	resp := dispatch(m, protocol.Request{Action: "no-such-action"})
 	if resp.OK || !strings.Contains(resp.Error, "未知 action") {
 		t.Errorf("未知 action 应返回错误，得到: %+v", resp)
@@ -147,6 +140,77 @@ func TestDispatchErrors(t *testing.T) {
 	resp = dispatch(m, protocol.Request{Action: protocol.ActionPause, Name: "ghost"})
 	if resp.OK || !strings.Contains(resp.Error, "不存在") {
 		t.Errorf("暂停不存在任务应报错，得到: %+v", resp)
+	}
+}
+
+// TestDispatchPomodoroLifecycle 验证 pomodoro start/status/stop 的分发链路，
+// 含 Name 为空时对唯一活动序列的解析。
+func TestDispatchPomodoroLifecycle(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	if resp := dispatch(m, protocol.Request{
+		Action: protocol.ActionPomodoroStart,
+		Name:   "focus",
+		Args: map[string]string{
+			"work": "10s", "short": "5s", "long": "15s", "cycle": "2",
+			"rule": "", "finish_on": "sequence",
+		},
+	}); !resp.OK {
+		t.Fatalf("pomodoro start 失败: %s", resp.Error)
+	}
+
+	// Name 为空时应解析到唯一活动序列。
+	resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus})
+	if !resp.OK || resp.Pomodoro == nil {
+		t.Fatalf("pomodoro status 响应异常: %+v", resp)
+	}
+	if resp.Pomodoro.Phase != phaseWork || resp.Pomodoro.Completed != 0 || resp.Pomodoro.Cycle != 2 {
+		t.Errorf("PomodoroInfo = %+v, want phase=work completed=0 cycle=2", resp.Pomodoro)
+	}
+
+	if resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStop}); !resp.OK {
+		t.Fatalf("pomodoro stop 失败: %s", resp.Error)
+	}
+
+	// 无活动番茄钟：status 返回 OK 且无 Pomodoro 字段；stop 报 no active pomodoro。
+	resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus})
+	if !resp.OK || resp.Pomodoro != nil {
+		t.Errorf("无活动番茄钟时 status 应 OK 且无 Pomodoro 字段: %+v", resp)
+	}
+	resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStop})
+	if resp.OK || resp.Error != "no active pomodoro" {
+		t.Errorf("无活动番茄钟时 stop 应报 no active pomodoro，得到: %+v", resp)
+	}
+}
+
+// TestDispatchPomodoroErrors 验证参数校验与名称解析失败的错误路径。
+func TestDispatchPomodoroErrors(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+
+	if resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStart, Name: ""}); resp.OK ||
+		resp.Error != "番茄钟名称不能为空" {
+		t.Errorf("空名称 pomodoro start 应失败，得到: %+v", resp)
+	}
+
+	if resp := dispatch(m, protocol.Request{
+		Action: protocol.ActionPomodoroStart,
+		Name:   "focus",
+		Args:   map[string]string{"work": "abc"},
+	}); resp.OK || !strings.Contains(resp.Error, "解析 work") {
+		t.Errorf("非法 work 应失败，得到: %+v", resp)
+	}
+
+	if resp := dispatch(m, protocol.Request{
+		Action: protocol.ActionPomodoroStart,
+		Name:   "focus",
+		Args:   map[string]string{"cycle": "x"},
+	}); resp.OK || !strings.Contains(resp.Error, "解析 cycle") {
+		t.Errorf("非法 cycle 应失败，得到: %+v", resp)
+	}
+
+	if resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus, Name: "ghost"}); resp.OK ||
+		!strings.Contains(resp.Error, "不存在") {
+		t.Errorf("不存在的番茄钟 status 应失败，得到: %+v", resp)
 	}
 }
 
