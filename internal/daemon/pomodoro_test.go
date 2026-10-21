@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +49,29 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("等待文件 %s 超时", path)
+}
+
+// overrideAskConfirm 将确认弹窗替换为固定返回 ok 的桩函数，测试结束后恢复。
+// 真实 askConfirm 会阻塞等待用户交互（最长 promptTimeout），自动化测试必须打桩。
+func overrideAskConfirm(t *testing.T, ok bool) {
+	t.Helper()
+	old := askConfirmFn
+	askConfirmFn = func(*slog.Logger, string, string) bool { return ok }
+	t.Cleanup(func() { askConfirmFn = old })
+}
+
+// waitForWaiting 轮询等待番茄钟进入 waiting 状态：确认弹窗结果由独立 goroutine
+// 异步结算，断言前需等待其完成。
+func waitForWaiting(t *testing.T, p *PomodoroTracker, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if p.Status().Waiting {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待 waiting 状态超时，当前: %+v", p.Status())
 }
 
 // TestPomodoroStartsInWorkPhase 验证构造后立即启动 work 阶段任务并以序列名注册。
@@ -117,6 +142,7 @@ func TestPomodoroFillDefaults(t *testing.T) {
 // TestPomodoroWorkToShortBreak 验证专注正常完成后进入短休、completed 递增，
 // 且旧阶段任务被同名新任务替换。
 func TestPomodoroWorkToShortBreak(t *testing.T) {
+	overrideAskConfirm(t, true)
 	m := NewManager(nil, nil, nil)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Work:       30 * time.Millisecond,
@@ -143,6 +169,7 @@ func TestPomodoroWorkToShortBreak(t *testing.T) {
 
 // TestPomodoroLongBreakAfterCycle 验证每完成 Cycle 个专注后进入长休（验收 7）。
 func TestPomodoroLongBreakAfterCycle(t *testing.T) {
+	overrideAskConfirm(t, true)
 	m := NewManager(nil, nil, nil)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Work:       20 * time.Millisecond,
@@ -197,6 +224,7 @@ func TestPomodoroPauseKeepsProgress(t *testing.T) {
 // TestPomodoroEachFinishCommandRunsPerStage 验证 each 模式下每阶段结束执行
 // 规则的 finish_command。
 func TestPomodoroEachFinishCommandRunsPerStage(t *testing.T) {
+	overrideAskConfirm(t, false)
 	flagFile := filepath.Join(t.TempDir(), "stage-done")
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
@@ -246,6 +274,7 @@ func TestPomodoroSequenceFinishCommandOnStop(t *testing.T) {
 // TestPomodoroFinishCommandFailureNotBlocking 验证 finish_command 失败仅记日志，
 // 不阻塞阶段推进（F12）；同时覆盖 FinishOn 缺省为 each。
 func TestPomodoroFinishCommandFailureNotBlocking(t *testing.T) {
+	overrideAskConfirm(t, true)
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
 			"pomo": {FinishCommand: "exit 3"},
@@ -262,4 +291,58 @@ func TestPomodoroFinishCommandFailureNotBlocking(t *testing.T) {
 
 	waitForPomodoroPhase(t, p, phaseShortBreak, 2*time.Second)
 	p.Stop()
+}
+
+// TestPomodoroWaitingAndNext 验证阶段结束确认被拒绝时进入 waiting（phase 保持
+// 已完成阶段、剩余归零、无活动任务），tempo pomodoro next 推进后进入
+// pendingPhase 对应阶段并清除 waiting。
+func TestPomodoroWaitingAndNext(t *testing.T) {
+	overrideAskConfirm(t, false)
+	m := NewManager(nil, nil, nil)
+	p := newPomodoroTracker("pomo", PomodoroOptions{
+		Work:       30 * time.Millisecond,
+		ShortBreak: time.Second,
+		LongBreak:  time.Second,
+		Cycle:      4,
+	}, m)
+
+	waitForWaiting(t, p, 2*time.Second)
+	st := p.Status()
+	if !st.Waiting || st.Phase != phaseWork || st.Completed != 1 || st.Remaining != "0s" {
+		t.Errorf("waiting 状态 = %+v, want waiting=true phase=work completed=1 remaining=0s", st)
+	}
+	waitForTasks(t, m, 0, time.Second)
+
+	if err := m.PomodoroNext("pomo"); err != nil {
+		t.Fatalf("PomodoroNext: %v", err)
+	}
+	st = p.Status()
+	if st.Waiting || st.Phase != phaseShortBreak || st.Completed != 1 {
+		t.Errorf("next 后状态 = %+v, want waiting=false phase=short_break completed=1", st)
+	}
+	waitForTasks(t, m, 1, time.Second)
+
+	p.Stop()
+}
+
+// TestPomodoroNextGuarded 验证推进的防御路径：未知名称报错；阶段任务运行中
+// Advance 为幂等 no-op。
+func TestPomodoroNextGuarded(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	if err := m.PomodoroNext("ghost"); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Errorf("推进不存在的番茄钟应报错，得到: %v", err)
+	}
+
+	overrideAskConfirm(t, false)
+	p := newPomodoroTracker("pomo", PomodoroOptions{
+		Work:       time.Hour, // 运行中不会结束，验证幂等
+		ShortBreak: time.Second,
+		LongBreak:  time.Second,
+		Cycle:      4,
+	}, m)
+	defer p.Stop()
+
+	if err := p.Advance(); err != nil {
+		t.Errorf("阶段任务运行中 Advance 应幂等返回 nil，得到: %v", err)
+	}
 }

@@ -30,6 +30,7 @@ type PomodoroInfo struct {
 	Completed int    `json:"completed"`
 	Cycle     int    `json:"cycle"`
 	Remaining string `json:"remaining"`
+	Waiting   bool   `json:"waiting,omitempty"` // 阶段结束待确认，等待 pomodoro next
 }
 
 // IPC 动作常量，对应 Request.Action 的合法取值。
@@ -42,4 +43,5 @@ const (
 	ActionPomodoroStart  = "pomodoro_start"
 	ActionPomodoroStatus = "pomodoro_status"
 	ActionPomodoroStop   = "pomodoro_stop"
+	ActionPomodoroNext   = "pomodoro_next"
 )

@@ -96,6 +96,12 @@ func dispatch(m *Manager, req protocol.Request) protocol.Response {
 		return dispatchPomodoroStatus(m, req)
 	case protocol.ActionPomodoroStop:
 		return dispatchPomodoroStop(m, req)
+	case protocol.ActionPomodoroNext:
+		if err := m.PomodoroNext(req.Name); err != nil {
+			m.logger.Error("推进番茄钟失败", "task", req.Name, "action", "pomodoro_next", "error", err)
+			return errResponse(err.Error())
+		}
+		return protocol.Response{OK: true}
 	default:
 		return errResponse(fmt.Sprintf("未知 action %q", req.Action))
 	}

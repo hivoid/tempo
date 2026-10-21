@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"tempo/internal/protocol"
 	"tempo/internal/transport"
@@ -225,5 +226,57 @@ func TestServeReturnsErrorWhenListenFails(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "missing", "nested"))
 	if err := Serve(NewManager(nil, nil, nil)); err == nil {
 		t.Error("监听失败时 Serve 应返回错误")
+	}
+}
+
+// waitForPomodoroWaiting 轮询直到指定番茄钟的 status 显示 waiting。
+func waitForPomodoroWaiting(t *testing.T, m *Manager, name string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus, Name: name})
+		if resp.OK && resp.Pomodoro != nil && resp.Pomodoro.Waiting {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待 %s 进入 waiting 超时", name)
+}
+
+// TestDispatchPomodoroNext 验证 pomodoro_next 分发：阶段结束确认被拒进入 waiting
+// 后推进成功、waiting 清除；未知名称返回错误。
+func TestDispatchPomodoroNext(t *testing.T) {
+	overrideAskConfirm(t, false)
+	m := NewManager(nil, nil, nil)
+
+	if resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroNext, Name: "ghost"}); resp.OK ||
+		!strings.Contains(resp.Error, "不存在") {
+		t.Errorf("推进不存在的番茄钟应报错，得到: %+v", resp)
+	}
+
+	if resp := dispatch(m, protocol.Request{
+		Action: protocol.ActionPomodoroStart,
+		Name:   "focus",
+		Args:   map[string]string{"work": "20ms", "cycle": "2"},
+	}); !resp.OK {
+		t.Fatalf("pomodoro start 失败: %s", resp.Error)
+	}
+
+	waitForPomodoroWaiting(t, m, "focus", 2*time.Second)
+
+	if resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroNext, Name: "focus"}); !resp.OK {
+		t.Fatalf("pomodoro next 失败: %s", resp.Error)
+	}
+
+	resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus, Name: "focus"})
+	if !resp.OK || resp.Pomodoro == nil || resp.Pomodoro.Waiting {
+		t.Fatalf("next 后 status 应无 waiting: %+v", resp)
+	}
+	if resp.Pomodoro.Phase != phaseShortBreak {
+		t.Errorf("next 后阶段 = %q, want short_break", resp.Pomodoro.Phase)
+	}
+
+	if resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStop, Name: "focus"}); !resp.OK {
+		t.Fatalf("pomodoro stop 失败: %s", resp.Error)
 	}
 }

@@ -271,6 +271,18 @@ func (m *Manager) PomodoroStop(name string) error {
 	return nil
 }
 
+// PomodoroNext 手动推进指定番茄钟到待确认的下一阶段：阶段结束确认被拒绝或
+// 无法弹窗时序列进入 waiting，由本方法作为恢复入口（对应 CLI tempo pomodoro next）。
+func (m *Manager) PomodoroNext(name string) error {
+	m.mu.Lock()
+	p, ok := m.pomodoros[name]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("番茄钟 %s 不存在", name)
+	}
+	return p.Advance()
+}
+
 // PomodoroNames 返回所有活动番茄钟序列的名称，按名称排序。
 // 供 IPC 层在 CLI 未指定名称时解析唯一活动序列。
 func (m *Manager) PomodoroNames() []string {

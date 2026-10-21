@@ -30,6 +30,7 @@ const usage = `tempo — CLI 计时器
   tempo pomodoro start --name|-n NAME [--work 25m] [--short 5m] [--long 15m]
                         [--cycle 4] [--rule|-r RULE] [--finish-on each|sequence]
   tempo pomodoro status [NAME]                  查看当前阶段与周期进度
+  tempo pomodoro next NAME                      推进等待确认的下一阶段
   tempo pomodoro stop [NAME]                    终止番茄钟序列
 `
 
@@ -193,6 +194,8 @@ func runPomodoro(args []string) error {
 		return runPomodoroStart(args[1:])
 	case "status":
 		return runPomodoroStatus(args[1:])
+	case "next":
+		return runPomodoroNext(args[1:])
 	case "stop":
 		return runPomodoroStop(args[1:])
 	default:
@@ -261,9 +264,31 @@ func runPomodoroStatus(args []string) error {
 		return nil
 	}
 	p := resp.Pomodoro
-	fmt.Printf("phase=%s, completed=%d/%d, remaining=%s\n",
-		p.Phase, p.Completed, p.Cycle, p.Remaining)
+	suffix := ""
+	if p.Waiting {
+		// 阶段结束待确认，需要 tempo pomodoro next 手动推进。
+		suffix = " (waiting)"
+	}
+	fmt.Printf("phase=%s, completed=%d/%d, remaining=%s%s\n",
+		p.Phase, p.Completed, p.Cycle, p.Remaining, suffix)
 	return nil
+}
+
+// runPomodoroNext 推进处于 waiting 状态的番茄钟到下一阶段：阶段结束确认被拒绝
+// 或无法弹窗后的手动恢复入口。
+func runPomodoroNext(args []string) error {
+	fs := flag.NewFlagSet("pomodoro next", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("pomodoro next: 用法: tempo pomodoro next NAME")
+	}
+
+	return callAndReport(protocol.Request{
+		Action: protocol.ActionPomodoroNext,
+		Name:   fs.Arg(0),
+	})
 }
 
 // runPomodoroStop 终止番茄钟序列。可选位置参数 NAME 指定序列；省略时由 daemon
