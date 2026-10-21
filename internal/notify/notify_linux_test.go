@@ -38,30 +38,45 @@ func TestNotifyPassesTimeoutInMilliseconds(t *testing.T) {
 		t.Fatalf("读取参数记录: %v", err)
 	}
 	got := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	want := []string{"-u", "normal", "-t", "10000", "tempo", "计时结束"}
+	want := []string{"-i", "clock", "-a", "tempo", "-u", "normal", "-t", "10000", "tempo", "计时结束"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("notify-send 参数 = %v, want %v", got, want)
 	}
 }
 
-func TestNotifyOmitsTimeoutWhenDurationNotPositive(t *testing.T) {
+// TestNotifyUsesDefaultTimeoutWhenDurationNotPositive 验证 duration 非正或按秒
+// 取整为 0（不足 1 秒）时，-t 采用默认 30 秒（300000ms 语义下的 30000ms）。
+func TestNotifyUsesDefaultTimeoutWhenDurationNotPositive(t *testing.T) {
 	writeFakeNotifySend(t, `printf '%s\n' "$@" >> "$TEMPO_ARGS_FILE"
 `)
-	logFile := filepath.Join(t.TempDir(), "args.txt")
-	t.Setenv("TEMPO_ARGS_FILE", logFile)
 
-	if err := NewNotifier().Notify("tempo", "计时结束", 0); err != nil {
-		t.Fatalf("Notify: %v", err)
-	}
+	for _, tc := range []struct {
+		name     string
+		duration time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -time.Second},
+		{"subSecond", 500 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logFile := filepath.Join(t.TempDir(), "args.txt")
+			t.Setenv("TEMPO_ARGS_FILE", logFile)
 
-	data, err := os.ReadFile(logFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	want := []string{"-u", "normal", "tempo", "计时结束"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("notify-send 参数 = %v, want %v（duration<=0 应省略 -t）", got, want)
+			if err := NewNotifier().Notify("tempo", "计时结束", tc.duration); err != nil {
+				t.Fatalf("Notify: %v", err)
+			}
+
+			data, err := os.ReadFile(logFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+			want := []string{"-i", "clock", "-a", "tempo", "-u", "normal", "-t", "30000", "tempo", "计时结束"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("notify-send 参数 = %v, want %v（duration=%v 应取默认 30 秒）",
+					got, want, tc.duration)
+			}
+		})
 	}
 }
 
