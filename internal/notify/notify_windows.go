@@ -8,7 +8,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jimbertools/toast/pkg/toast"
+	"github.com/go-toast/toast"
 )
 
 // appName 是 Toast 通知使用的 AppUserModelID。
