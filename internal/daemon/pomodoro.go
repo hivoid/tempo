@@ -27,7 +27,7 @@ type PomodoroTracker struct {
 	mgr  *Manager        // 所属管理器，负责任务注册、日志与默认提醒
 
 	phase     string // 当前阶段：phaseWork | phaseShortBreak | phaseLongBreak
-	completed int    // 已正常完成的专注阶段数
+	completed int    // 当前 cycle 内已完成专注数，0..Cycle，long_break 结束后归零
 	current   *Task  // 当前阶段任务；阶段切换间隙或停止后为 nil
 	stopped   bool   // 序列是否已被用户终止
 }
@@ -97,6 +97,12 @@ func (p *PomodoroTracker) startStage(phase string, d time.Duration) {
 // （移除任务、记录日志、发送平台默认提醒），再按状态机推进到下一阶段并自动创建
 // 下一阶段任务（F15、4.5 节）。finish_command 是默认提醒之外的附加动作，
 // 由本方法按 FinishOn 语义调度，两者互不影响。
+//
+// completed（当前 cycle 内已完成专注数，0..Cycle）在各分支的变化：
+//   - work 正常结束：completed++，只有 work 完成才递增；
+//   - long_break 正常结束：completed 归零，开启新 cycle；
+//   - short_break 正常结束：不变。
+// 暂停/继续只作用于当前阶段任务，不会触发本回调，completed 不受影响（F20）。
 func (p *PomodoroTracker) onStageComplete(t *Task) {
 	p.mu.Lock()
 	if p.stopped {
@@ -104,8 +110,11 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 		return
 	}
 	from := p.phase
-	if from == phaseWork {
+	switch from {
+	case phaseWork:
 		p.completed++
+	case phaseLongBreak:
+		p.completed = 0
 	}
 	completed := p.completed
 	next, d := p.nextStageLocked(from)
@@ -113,6 +122,10 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 	p.current = nil
 	p.mu.Unlock()
 
+	// 旧阶段任务收尾：先 Stop 兜底确保计时器不可能再次触发（fire 已触发过
+	// onFinish，由此保证每个 Task 的 onFinish 至多执行一次），再经 onTaskFinish
+	// 从 Manager.tasks 删除，最后 startStage 才注册同名新任务。
+	t.Stop()
 	p.mgr.onTaskFinish(t)
 
 	p.mgr.logger.Info("番茄钟阶段切换",
@@ -131,21 +144,22 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 	p.startStage(next, d)
 }
 
-// nextStageLocked 按 4.5 节状态机返回下一阶段及其时长：专注完成后，已完成专注数
-// 恰为 Cycle 的整数倍时进入长休，否则进入短休；休息完成后进入下一个专注。
-// 调用方须持有 p.mu。
+// nextStageLocked 按 4.5 节状态机返回下一阶段及其时长：专注完成后，当前 cycle
+// 内已完成专注数达到 Cycle 时进入长休，否则进入短休；休息完成后进入下一个专注。
+// 调用方须持有 p.mu，且 completed 已按本阶段结果更新（0..Cycle）。
 func (p *PomodoroTracker) nextStageLocked(from string) (string, time.Duration) {
 	if from != phaseWork {
 		return phaseWork, p.opts.Work
 	}
-	if p.completed%p.opts.Cycle == 0 {
+	if p.completed >= p.opts.Cycle {
 		return phaseLongBreak, p.opts.LongBreak
 	}
 	return phaseShortBreak, p.opts.ShortBreak
 }
 
-// Status 返回当前阶段与周期进度（F18）：phase 为当前阶段名，completed 为已完成
-// 专注数，cycle 为一个长休周期包含的专注数，remaining 为当前阶段任务剩余时长。
+// Status 返回当前阶段与周期进度（F18）：phase 为当前阶段名，completed 为当前
+// cycle 内已完成的专注数（0..Cycle，长休结束后归零），cycle 为一个长休周期包含
+// 的专注数，remaining 为当前阶段任务剩余时长。
 func (p *PomodoroTracker) Status() protocol.PomodoroInfo {
 	p.mu.Lock()
 	defer p.mu.Unlock()
