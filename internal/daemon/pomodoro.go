@@ -164,10 +164,12 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 		go p.runFinishCommand(from)
 	}
 
+	title, message, fallback := buildPromptText(from, next, p.opts)
+
 	// 确认弹窗可能阻塞至用户响应（上限 promptTimeout），放入独立 goroutine，
 	// 不阻塞 time.AfterFunc 的回调线程；三态结果分别驱动推进/停止/等待。
 	go func() {
-		result := confirm(p.mgr.logger, confirmTitle, confirmMessage)
+		result := confirm(p.mgr.logger, title, message, fallback)
 		switch result {
 		case PromptContinue:
 			if err := p.Advance(); err != nil {
@@ -242,6 +244,46 @@ func (p *PomodoroTracker) stageDuration(phase string) time.Duration {
 		return p.opts.LongBreak
 	default:
 		return p.opts.Work
+	}
+}
+
+// formatStageDuration 格式化阶段时长用于提示文案：整分钟输出「N 分钟」，
+// 否则使用 time.Duration.String()（如 "5s"、"1m30s"）。
+func formatStageDuration(d time.Duration) string {
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%d 分钟", int(d/time.Minute))
+	}
+	return d.String()
+}
+
+// buildPromptText 按「当前阶段 → 下一阶段」组合生成确认弹窗的标题、交互正文
+// 与回退通知文案；时长与周期数取自 opts。未知组合回退到通用文案。
+func buildPromptText(curPhase, nextPhase string, opts PomodoroOptions) (title, message, fallback string) {
+	work := formatStageDuration(opts.Work)
+	shortBreak := formatStageDuration(opts.ShortBreak)
+	longBreak := formatStageDuration(opts.LongBreak)
+
+	switch {
+	case curPhase == phaseWork && nextPhase == phaseShortBreak:
+		return "专注结束",
+			fmt.Sprintf("专注阶段结束，进入 %s 短休？", shortBreak),
+			fmt.Sprintf("专注结束，未检测到交互工具，已自动进入 %s 短休。", shortBreak)
+	case curPhase == phaseWork && nextPhase == phaseLongBreak:
+		return "专注结束",
+			fmt.Sprintf("已完成 %d 个专注周期，进入 %s 长休？", opts.Cycle, longBreak),
+			fmt.Sprintf("已完成 %d 个专注周期，未检测到交互工具，已自动进入 %s 长休。", opts.Cycle, longBreak)
+	case curPhase == phaseShortBreak && nextPhase == phaseWork:
+		return "短休结束",
+			fmt.Sprintf("短休结束，开始下一个 %s 专注？", work),
+			fmt.Sprintf("短休结束，未检测到交互工具，已自动开始下一个 %s 专注。", work)
+	case curPhase == phaseLongBreak && nextPhase == phaseWork:
+		return "长休结束",
+			"长休结束，开始新的专注周期？",
+			"长休结束，未检测到交互工具，已自动开始新的专注周期。"
+	default:
+		return "阶段结束",
+			"阶段结束，是否开始下一阶段？",
+			"阶段结束，未检测到交互工具，已自动进入下一阶段。"
 	}
 }
 

@@ -56,7 +56,7 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 func overrideAskConfirm(t *testing.T, result PromptResult) {
 	t.Helper()
 	old := askConfirmFn
-	askConfirmFn = func(*slog.Logger, string, string) PromptResult { return result }
+	askConfirmFn = func(*slog.Logger, string, string, string) PromptResult { return result }
 	t.Cleanup(func() { askConfirmFn = old })
 }
 

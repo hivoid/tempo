@@ -1,8 +1,8 @@
 package daemon
 
-// 阶段结束三选确认弹窗（继续/停止/暂停）：按 kdialog → zenity → notify-send
-// 的顺序探测并回退。本文件平台无关、不带 build tag；所探测命令均为 Linux
-// 桌面环境工具，Windows 提醒由 notify 包的 Toast/MessageBox 承担（CONTEXT.md §3）。
+// 三选确认弹窗（继续/停止/暂停）：按 kdialog → zenity → notify-send 的顺序
+// 探测并回退。本文件平台无关、不带 build tag；所探测命令均为 Linux 桌面环境
+// 工具，Windows 提醒由 notify 包的 Toast/MessageBox 承担（CONTEXT.md §3）。
 
 import (
 	"context"
@@ -13,12 +13,6 @@ import (
 	"time"
 )
 
-// confirmTitle 与 confirmMessage 是阶段结束确认弹窗的标题与正文。
-const (
-	confirmTitle   = "tempo"
-	confirmMessage = "阶段结束，是否开始下一阶段？"
-)
-
 // promptTimeout 限制单次确认命令的等待时长，超时按执行失败处理、继续回退。
 const promptTimeout = 5 * time.Minute
 
@@ -26,11 +20,11 @@ const promptTimeout = 5 * time.Minute
 type PromptResult int
 
 const (
-	// PromptContinue 表示用户选择继续，推进到下一阶段。
+	// PromptContinue 表示用户选择继续，由调用方推进到下一阶段。
 	PromptContinue PromptResult = iota
-	// PromptStop 表示用户选择停止，终止整个番茄钟序列。
+	// PromptStop 表示用户选择停止，由调用方终止当前流程。
 	PromptStop
-	// PromptPause 表示用户选择暂停（或无法弹窗），进入 waiting 等待 pomo next。
+	// PromptPause 表示用户选择暂停，由调用方进入等待手动恢复的状态。
 	PromptPause
 )
 
@@ -57,13 +51,14 @@ var askConfirmFn = askConfirm
 //   - zenity --question + --extra-button 可用时：退出码 0 为继续；退出码 1 且
 //     stdout 含额外按钮文本「暂停」为暂停（zenity 点击额外按钮时把按钮文本
 //     打到 stdout 并以退出码 1 退出），否则为停止；
-//   - notify-send 可用时仅发送通知、无法阻塞等待选择，发出后按暂停处理
-//     （关闭通知不等于用户想终止序列）；
-//   - 三者均不可用时记录日志并按暂停处理。
+//   - notify-send 可用时仅发送通知、无法阻塞等待选择，发出后按继续处理
+//     （无交互式弹窗时自动继续优于停滞）；
+//   - 三者均不可用时记录日志并按继续处理。
 //
-// 暂停（或无法弹窗）时调用方进入 waiting 状态，等待 tempo pomo next 推进。
-// 某个工具执行失败（如无法连接显示服务）时记录日志并继续尝试下一个工具。
-func askConfirm(logger *slog.Logger, title, message string) PromptResult {
+// message 用于交互式弹窗正文，fallbackMessage 用于纯通知回退时的通知正文，
+// 两者由调用方按场景区分。某个工具执行失败（如无法连接显示服务）时记录
+// 日志并继续尝试下一个工具。
+func askConfirm(logger *slog.Logger, title, message, fallbackMessage string) PromptResult {
 	if _, err := exec.LookPath("kdialog"); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
 		defer cancel()
@@ -106,19 +101,19 @@ func askConfirm(logger *slog.Logger, title, message string) PromptResult {
 		}
 	}
 	if _, err := exec.LookPath("notify-send"); err == nil {
+		// 仅通知、无法阻塞确认：正文用回退文案，通知送达后自动继续。
+		logger.Info("no interactive prompt available, auto-continue")
 		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
 		defer cancel()
 		if err := exec.CommandContext(ctx, "notify-send",
-			"-i", "clock", "-n", "alarm", "-a", "tempo", "-t", "60000",
-			title, message).Run(); err != nil {
+			"-i", "clock", "-a", "tempo", "-t", "60000",
+			title, fallbackMessage).Run(); err != nil {
 			logger.Error("notify-send 提示失败", "error", err)
 		}
-		// 仅通知、无法阻塞确认，按暂停处理进入 waiting。
-		logger.Info("确认弹窗已选择", "tool", "notify-send", "result", PromptPause)
-		return PromptPause
+		return PromptContinue
 	}
-	logger.Error("无可用确认工具（kdialog/zenity/notify-send），番茄钟进入 waiting")
-	return PromptPause
+	logger.Warn("no prompt tool available, auto-continue")
+	return PromptContinue
 }
 
 // exitCode 返回命令的退出码：err 为 nil 时为 0；非 ExitError（被超时杀死、
