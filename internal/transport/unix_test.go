@@ -44,7 +44,8 @@ func TestServerRoundtrip(t *testing.T) {
 	if err := srv.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer srv.Close()
+	// 清理失败的错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = srv.Close() }()
 
 	served := make(chan error, 1)
 	go func() {
@@ -53,7 +54,8 @@ func TestServerRoundtrip(t *testing.T) {
 			served <- err
 			return
 		}
-		defer c.Close()
+		// 清理失败的错误无法补救，显式忽略以满足 errcheck。
+		defer func() { _ = c.Close() }()
 		req, err := c.ReadRequest()
 		if err != nil {
 			served <- err
@@ -73,7 +75,8 @@ func TestServerRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close()
+	// 测试结束后关闭连接，错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = conn.Close() }()
 	if _, err := conn.Write([]byte(`{"action":"list"}` + "\n")); err != nil {
 		t.Fatalf("发送请求: %v", err)
 	}
@@ -140,7 +143,8 @@ func TestDoubleListenRejected(t *testing.T) {
 	if err := srv.Listen(); err != nil {
 		t.Fatal(err)
 	}
-	defer srv.Close()
+	// 清理失败的错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = srv.Close() }()
 	if err := srv.Listen(); err == nil {
 		t.Error("重复 Listen 应返回错误")
 	}
@@ -148,8 +152,9 @@ func TestDoubleListenRejected(t *testing.T) {
 
 func TestReadRequestRejectsInvalidJSON(t *testing.T) {
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	// 测试管道，Close 失败无需处理，显式忽略以满足 errcheck。
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 	conn := &unixConn{conn: c1, reader: bufio.NewReader(c1)}
 	go func() {
 		_, _ = c2.Write([]byte("不是 JSON\n"))
