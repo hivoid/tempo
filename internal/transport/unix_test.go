@@ -112,7 +112,8 @@ func TestListenRemovesStaleFile(t *testing.T) {
 	if err := srv.Listen(); err != nil {
 		t.Fatalf("Listen 应清理残留文件: %v", err)
 	}
-	defer srv.Close()
+	// 清理失败的错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = srv.Close() }()
 }
 
 func TestCloseRemovesSocketFile(t *testing.T) {
