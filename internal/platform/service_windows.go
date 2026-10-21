@@ -78,10 +78,11 @@ func InstallService(name, displayName, exePath string) error {
 	if err != nil {
 		return fmt.Errorf("连接服务控制管理器: %w", err)
 	}
-	defer m.Disconnect()
+	// 清理失败的错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = m.Disconnect() }()
 
 	if s, err := m.OpenService(name); err == nil {
-		s.Close()
+		_ = s.Close()
 		return fmt.Errorf("服务 %s 已存在", name)
 	}
 
@@ -93,7 +94,8 @@ func InstallService(name, displayName, exePath string) error {
 	if err != nil {
 		return fmt.Errorf("创建服务 %s: %w", name, err)
 	}
-	defer s.Close()
+	// Close 失败无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = s.Close() }()
 
 	// 失败自动重启：间隔 10s，失败计数每 60s 重置，保证 daemon 意外退出后可恢复。
 	if err := s.SetRecoveryActions([]mgr.RecoveryAction{
@@ -111,13 +113,14 @@ func RemoveService(name string) error {
 	if err != nil {
 		return fmt.Errorf("连接服务控制管理器: %w", err)
 	}
-	defer m.Disconnect()
+	// 清理失败的错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = m.Disconnect() }()
 
 	s, err := m.OpenService(name)
 	if err != nil {
 		return fmt.Errorf("打开服务 %s: %w", name, err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	if status, err := s.Query(); err == nil && status.State != svc.Stopped {
 		if _, err := s.Control(svc.Stop); err != nil {
