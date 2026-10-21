@@ -25,7 +25,7 @@ func startTestServer(t *testing.T, m *Manager) string {
 	if err := srv.Listen(); err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	t.Cleanup(func() { srv.Close() })
+	t.Cleanup(func() { _ = srv.Close() })
 
 	go func() {
 		for {
@@ -46,10 +46,13 @@ func exchange(t *testing.T, sockPath, line string) protocol.Response {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close()
+	// 测试结束后关闭连接，错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = conn.Close() }()
 	if _, err := conn.Write([]byte(line + "\n")); err != nil {
 		t.Fatalf("发送请求: %v", err)
 	}
+	// 测试结束后关闭连接，错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = conn.Close() }()
 	respLine, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
 		t.Fatalf("读取响应: %v", err)

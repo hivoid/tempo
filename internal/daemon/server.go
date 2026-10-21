@@ -25,7 +25,8 @@ func Serve(m *Manager) error {
 	if err := srv.Listen(); err != nil {
 		return fmt.Errorf("daemon: 监听 IPC: %w", err)
 	}
-	defer srv.Close()
+	// 返回前关闭监听器，错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = srv.Close() }()
 
 	m.logger.Info("IPC 监听已启动", "action", "serve")
 
@@ -40,7 +41,8 @@ func Serve(m *Manager) error {
 
 // handleConn 处理单条 IPC 连接：读取一个请求，分发到 Manager 并回写响应。
 func handleConn(m *Manager, conn transport.Conn) {
-	defer conn.Close()
+	// 处理完毕关闭连接，错误无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = conn.Close() }()
 
 	req, err := conn.ReadRequest()
 	if err != nil {
