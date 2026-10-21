@@ -103,6 +103,7 @@ func InstallService(name, displayName, exePath string) error {
 	}, 60); err != nil {
 		return fmt.Errorf("设置失败恢复动作: %w", err)
 	}
+	fmt.Printf("服务 %s 已安装\n", name)
 	return nil
 }
 

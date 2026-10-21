@@ -14,6 +14,7 @@ import (
 	"tempo/internal/daemon"
 	"tempo/internal/logging"
 	"tempo/internal/notify"
+	"tempo/internal/platform"
 	"tempo/internal/protocol"
 )
 
@@ -34,21 +35,41 @@ const usage = `tempo — CLI 计时器
   tempo pomo stop [NAME]                        终止番茄钟序列
 `
 
-// 平台钩子：默认实现写在平台无关文件内，由 main_linux.go / main_windows.go 的
-// init 覆盖为真实平台实现。以变量形式声明，使得仅检查单文件的静态分析
-// （如 golangci-lint run main.go，此时不加载带 build tag 的平台文件）也能通过
-// 类型检查；实际构建时平台 init 总会覆盖为对应实现。
-var (
-	maybeRunAsServiceFn = func() (bool, error) { return false, nil }
-	installServiceFn    = func() error {
-		return errors.New("install-service 仅支持 Windows")
+// serviceName 是系统服务的注册名，安装与运行必须使用同一名称。
+const serviceName = "tempo"
+
+// runAsServiceIfNeeded 处理单二进制双模式（CONTEXT.md §5.7）：Windows 上进程由
+// SCM 启动时以服务身份运行 daemon 并阻塞至服务停止，返回 (true, err)；其余情况
+// 返回 (false, nil)，main 继续 CLI 流程。平台差异全部收在 internal/platform 内，
+// 因此本函数与 main.go 其余代码一样不含 build tag，可单独通过静态检查。
+func runAsServiceIfNeeded() (bool, error) {
+	inService, err := platform.IsWindowsService()
+	if err != nil {
+		return false, fmt.Errorf("检测服务运行模式: %w", err)
 	}
-)
+	if !inService {
+		return false, nil
+	}
+	return true, platform.RunAsService(serviceName, func() error {
+		return runDaemon(defaultConfigPath())
+	})
+}
+
+// installService 安装系统服务：Windows 上把当前二进制注册为 Windows Service
+// （需要管理员权限）；Linux 上打印 systemd unit 手动安装提示。具体行为由
+// internal/platform 按平台实现决定。
+func installService() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("定位可执行文件: %w", err)
+	}
+	return platform.InstallService(serviceName, "tempo daemon", exePath)
+}
 
 func main() {
 	// 单二进制双模式（CONTEXT.md §5.7）：Windows 上进程由 SCM 启动时进入服务
 	// 运行循环，不按 CLI 处理；Linux 上该检查恒为 false。
-	if handled, err := maybeRunAsServiceFn(); handled {
+	if handled, err := runAsServiceIfNeeded(); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tempo:", err)
 			os.Exit(1)
@@ -74,7 +95,7 @@ func main() {
 	case "pomo", "pomodoro": // pomodoro 为隐藏别名，保持向后兼容，不写入 usage
 		err = handlePomodoro(os.Args[2:])
 	case "install-service":
-		err = installServiceFn()
+		err = installService()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return
