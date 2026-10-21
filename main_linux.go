@@ -4,6 +4,12 @@ package main
 
 import "fmt"
 
+// init 将 Linux 实现注册到 main.go 的平台钩子变量。
+func init() {
+	maybeRunAsServiceFn = maybeRunAsService
+	installServiceFn = installService
+}
+
 // maybeRunAsService 在 Linux 上恒为非服务模式：daemon 由 systemd 用户服务托管、
 // 通过 `tempo daemon` 前台运行，无需在进程内判断启动来源（CONTEXT.md §5.7）。
 func maybeRunAsService() (bool, error) {

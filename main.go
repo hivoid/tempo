@@ -34,10 +34,21 @@ const usage = `tempo — CLI 计时器
   tempo pomo stop [NAME]                        终止番茄钟序列
 `
 
+// 平台钩子：默认实现写在平台无关文件内，由 main_linux.go / main_windows.go 的
+// init 覆盖为真实平台实现。以变量形式声明，使得仅检查单文件的静态分析
+// （如 golangci-lint run main.go，此时不加载带 build tag 的平台文件）也能通过
+// 类型检查；实际构建时平台 init 总会覆盖为对应实现。
+var (
+	maybeRunAsServiceFn = func() (bool, error) { return false, nil }
+	installServiceFn    = func() error {
+		return errors.New("install-service 仅支持 Windows")
+	}
+)
+
 func main() {
 	// 单二进制双模式（CONTEXT.md §5.7）：Windows 上进程由 SCM 启动时进入服务
 	// 运行循环，不按 CLI 处理；Linux 上该检查恒为 false。
-	if handled, err := maybeRunAsService(); handled {
+	if handled, err := maybeRunAsServiceFn(); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tempo:", err)
 			os.Exit(1)
@@ -63,7 +74,7 @@ func main() {
 	case "pomo", "pomodoro": // pomodoro 为隐藏别名，保持向后兼容，不写入 usage
 		err = handlePomodoro(os.Args[2:])
 	case "install-service":
-		err = installService()
+		err = installServiceFn()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return

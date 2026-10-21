@@ -12,6 +12,12 @@ import (
 // serviceName 是 Windows 服务的注册名，安装与运行必须使用同一名称。
 const serviceName = "tempo"
 
+// init 将 Windows 实现注册到 main.go 的平台钩子变量。
+func init() {
+	maybeRunAsServiceFn = maybeRunAsService
+	installServiceFn = installService
+}
+
 // maybeRunAsService 处理 Windows 服务模式（单二进制双模式，CONTEXT.md §5.7）：
 // 进程由 SCM 启动时以服务身份运行 daemon 并阻塞至服务停止，返回 (true, err)；
 // 否则返回 (false, nil)，main 继续 CLI 流程。
