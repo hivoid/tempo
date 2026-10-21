@@ -21,7 +21,7 @@ const usage = `tempo — CLI 计时器
 
 用法：
   tempo daemon                                  前台运行 daemon（调试）
-  tempo install-service                         打印 systemd 服务安装提示
+  tempo install-service                         安装系统服务（Windows 实际安装；Linux 打印手动安装提示）
   tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish CMD]
   tempo list                                    列出所有活动任务
   tempo pause NAME
@@ -34,6 +34,16 @@ const usage = `tempo — CLI 计时器
 `
 
 func main() {
+	// 单二进制双模式（CONTEXT.md §5.7）：Windows 上进程由 SCM 启动时进入服务
+	// 运行循环，不按 CLI 处理；Linux 上该检查恒为 false。
+	if handled, err := maybeRunAsService(); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tempo:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -42,7 +52,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "daemon":
-		err = runDaemon(os.Args[2:])
+		err = runDaemonCmd(os.Args[2:])
 	case "start":
 		err = runStart(os.Args[2:])
 	case "list":
@@ -52,8 +62,7 @@ func main() {
 	case "pomodoro":
 		err = runPomodoro(os.Args[2:])
 	case "install-service":
-		printInstallService()
-		return
+		err = installService()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return
@@ -72,20 +81,25 @@ func main() {
 	}
 }
 
-// runDaemon 前台运行 daemon：初始化日志、加载配置并启动 IPC 服务。
-func runDaemon(args []string) error {
+// runDaemonCmd 处理 daemon 子命令：解析 --config 后进入 daemon 启动逻辑。
+func runDaemonCmd(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath(), "规则配置 TOML 路径")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	return runDaemon(*configPath)
+}
 
+// runDaemon 启动 daemon：初始化日志、加载配置并启动 IPC 服务。
+// 由 daemon 子命令（前台调试）与 Windows 服务模式（main_windows.go）共用。
+func runDaemon(configPath string) error {
 	logger, err := logging.Init(defaultLogPath())
 	if err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
@@ -280,15 +294,6 @@ func callAndReport(req protocol.Request) error {
 	}
 	fmt.Println("ok")
 	return nil
-}
-
-// printInstallService 打印 Linux systemd 用户服务的手动安装提示，不实际执行安装。
-func printInstallService() {
-	fmt.Println("Linux 平台请手动安装 systemd 用户服务：")
-	fmt.Println("  1. mkdir -p ~/.config/systemd/user")
-	fmt.Println("  2. cp contrib/tempo-daemon.service ~/.config/systemd/user/")
-	fmt.Println("  3. systemctl --user daemon-reload")
-	fmt.Println("  4. systemctl --user enable --now tempo-daemon.service")
 }
 
 // defaultConfigPath 返回默认规则配置路径：$XDG_CONFIG_HOME/tempo/rules.toml。
