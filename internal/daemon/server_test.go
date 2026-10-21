@@ -51,8 +51,6 @@ func exchange(t *testing.T, sockPath, line string) protocol.Response {
 	if _, err := conn.Write([]byte(line + "\n")); err != nil {
 		t.Fatalf("发送请求: %v", err)
 	}
-	// 测试结束后关闭连接，错误无法补救，显式忽略以满足 errcheck。
-	defer func() { _ = conn.Close() }()
 	respLine, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
 		t.Fatalf("读取响应: %v", err)
