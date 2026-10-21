@@ -15,14 +15,14 @@ Supported platforms: **Linux** (verified on Arch Linux + Plasma 6) and **Windows
 - **Detached from the terminal**: managed by a systemd user service on Linux and a Windows Service on Windows — no `nohup`
 - **Rule configuration**: preset rules (duration + finish command) in TOML, referenced at runtime with `--rule`
 - **Custom finish actions**: desktop notification by default, or any command you specify
-- **Native Pomodoro**: automatic work / short break / long break cycling with configurable parameters
+- **Native Pomodoro**: work / short break / long break cycling with configurable parameters; each phase end pops a Continue / Stop / Pause dialog, with manual advance supported
 - **Structured logging**: standard library `log/slog`, written to both console and file
 
 ## Installation
 
 ### Build from source
 
-Requires Go ≥ 1.21.
+Requires Go ≥ 1.27 (matching go.mod).
 
 ```bash
 git clone <repo-url> tempo
@@ -86,9 +86,11 @@ tempo pause NAME
 tempo resume NAME
 tempo stop NAME
 
-tempo pomodoro start --name NAME [--work 25m] [--short 5m] [--long 15m] [--cycle 4] [--rule RULE]
-tempo pomodoro status
-tempo pomodoro stop
+tempo pomo start --name NAME [--work 25m] [--short 5m] [--long 15m] [--cycle 4]
+                 [--rule RULE] [--finish-on each|sequence]
+tempo pomo status [NAME]                      appends (waiting) while waiting for confirmation
+tempo pomo next NAME                          advance the pending next phase
+tempo pomo stop [NAME]
 ```
 
 ### Options
@@ -101,13 +103,14 @@ tempo pomodoro stop
 | `--finish`                      | Custom command to run on completion; overrides the rule's `finish_command` |
 | `--work` / `--short` / `--long` | Pomodoro phase durations                                                   |
 | `--cycle`                       | Number of work phases before a long break; default 4                       |
+| `--finish-on`                   | When the Pomodoro custom command runs: `each` (every phase) or `sequence` (whole sequence); default `each` |
 
 ## Configuration
 
 Config file location:
 
-- Linux: `~/.config/timer/rules.toml`
-- Windows: `%APPDATA%\timer\rules.toml`
+- Linux: `~/.config/tempo/rules.toml` (`$XDG_CONFIG_HOME` takes precedence)
+- Windows: `%APPDATA%\tempo\rules.toml`
 
 Example:
 
@@ -129,7 +132,7 @@ cycle = 4
 
 - When `finish_command` is empty, the platform default notification is used.
 - `finish_on` controls whether the custom command runs on every phase (`each`) or only when the whole sequence ends (`sequence`) in Pomodoro mode; default `each`.
-- `[pomodoro]` provides global defaults, overridable by CLI flags on `tempo pomodoro start`.
+- `[pomodoro]` provides global defaults, overridable by CLI flags on `tempo pomo start`.
 
 ### Custom finish command examples
 
@@ -144,19 +147,31 @@ tempo start --name work -t 25m --finish "powershell -Command \"Add-Type -Assembl
 ## Pomodoro
 
 ```bash
-tempo pomodoro start --name focus --work 30m --short 5m --long 20m --cycle 3
-tempo pomodoro status
-tempo pomodoro stop
+tempo pomo start --name focus --work 30m --short 5m --long 20m --cycle 3
+tempo pomo status
+tempo pomo stop
 ```
 
-Phases switch automatically: work → short break → work → … → long break → repeat. `status` shows the current phase, completed work count, and remaining time.
+Phase transitions require confirmation: at the end of each phase a Continue / Stop / Pause dialog pops up — kdialog, then zenity, are tried on Linux, and TaskDialog is used on Windows — and the next phase starts only after you choose:
+
+- **Continue**: start the next phase immediately, cycling work → short break → work → … → long break → repeat
+- **Stop**: terminate the whole sequence
+- **Pause**: the sequence enters waiting with progress preserved; advance it later with `tempo pomo next focus`
+
+When no interactive tool is available (headless environments), a notification is sent and the sequence auto-continues without interruption.
+
+`status` shows the current phase, completed work count, and remaining time; waiting state appends `(waiting)`:
+
+```
+phase=work, completed=1/4, remaining=0s (waiting)
+```
 
 Pause/resume applies to the current phase; cycle progress is preserved.
 
 ## Logging
 
-- Linux: `~/.local/state/timer/timer.log` (stdout is also collected by journald when run under systemd)
-- Windows: `%LOCALAPPDATA%\timer\timer.log`
+- Linux: `~/.local/state/tempo/tempo.log` (`$XDG_STATE_HOME` takes precedence; stdout is also collected by journald when run under systemd)
+- Windows: `%USERPROFILE%\.local\state\tempo\tempo.log`
 
 Logged events include daemon start/stop, task state changes, Pomodoro phase transitions, notification results, and IPC errors.
 
@@ -164,15 +179,17 @@ Logged events include daemon start/stop, task state changes, Pomodoro phase tran
 
 ```
 tempo/
-├── main.go                  CLI entry + daemon entry
+├── main.go                            CLI entry + daemon entry
+├── main_linux.go / main_windows.go    Platform entries: service mode detection, install-service
 ├── internal/
-│   ├── protocol/            Request/response structures
-│   ├── config/              TOML rule configuration
-│   ├── logging/             slog initialization
-│   ├── daemon/              Tasks, manager, Pomodoro, request dispatch
-│   ├── transport/           IPC (Linux Unix socket / Windows Named Pipe)
-│   ├── notify/              Desktop notifications (notify-send / Toast / MessageBoxW)
-│   └── platform/            Platform hosting (systemd / Windows Service)
+│   ├── protocol/                      Request/response structures
+│   ├── config/                        TOML rule configuration
+│   ├── logging/                       slog initialization
+│   ├── client/                        IPC client (CLI side)
+│   ├── daemon/                        Tasks, manager, Pomodoro, request dispatch, phase confirmation dialog
+│   ├── transport/                     IPC (Linux Unix socket / Windows Named Pipe)
+│   ├── notify/                        Desktop notifications (notify-send / Toast / MessageBoxW)
+│   └── platform/                      Platform hosting (systemd / Windows Service)
 └── contrib/
     └── tempo-daemon.service  Linux systemd unit
 ```
@@ -193,15 +210,3 @@ Platform-specific code is isolated with `//go:build linux` and `//go:build windo
 ## License
 
 MIT
-
-### 需要同步的改动
-
-中文 `README.md` 顶部也需加一行英文链接，保持双向可跳转：
-
-```markdown
-# tempo
-
-...（原有内容）
-
-[English](README.md)
-```
