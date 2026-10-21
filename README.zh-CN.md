@@ -15,14 +15,14 @@
 - **脱离终端**：Linux 由 systemd user service 托管，Windows 由 Windows Service 托管，不使用 `nohup`
 - **规则配置**：TOML 预置规则（时长 + 结束命令），运行时 `--rule` 引用
 - **自定义结束动作**：默认桌面提醒，也可指定任意命令
-- **番茄钟原生支持**：专注/短休/长休自动循环，参数可配置
+- **番茄钟原生支持**：专注/短休/长休自动循环，参数可配置；每阶段结束弹出「继续 / 停止 / 暂停」确认框，支持手动推进
 - **结构化日志**：标准库 `log/slog`，控制台与文件双写
 
 ## 安装
 
 ### 从源码构建
 
-需要 Go ≥ 1.21。
+需要 Go ≥ 1.27（与 go.mod 一致）。
 
 ```bash
 git clone <repo-url> tempo
@@ -86,9 +86,11 @@ tempo pause NAME
 tempo resume NAME
 tempo stop NAME
 
-tempo pomo start --name NAME [--work 25m] [--short 5m] [--long 15m] [--cycle 4] [--rule RULE]
-tempo pomo status
-tempo pomo stop
+tempo pomo start --name NAME [--work 25m] [--short 5m] [--long 15m] [--cycle 4]
+                 [--rule RULE] [--finish-on each|sequence]
+tempo pomo status [NAME]                      等待确认时追加 (waiting)
+tempo pomo next NAME                          推进等待确认的下一阶段
+tempo pomo stop [NAME]
 ```
 
 ### 选项说明
@@ -101,13 +103,14 @@ tempo pomo stop
 | `--finish`                      | 计时结束时执行的自定义命令，覆盖规则中的 `finish_command` |
 | `--work` / `--short` / `--long` | 番茄钟各阶段时长                                          |
 | `--cycle`                       | 每多少个专注后进入长休，默认 4                            |
+| `--finish-on`                   | 番茄钟自定义命令的执行时机：`each`（每阶段）或 `sequence`（整个序列）；默认 `each` |
 
 ## 配置
 
 配置文件位置：
 
-- Linux：`~/.config/timer/rules.toml`
-- Windows：`%APPDATA%\timer\rules.toml`
+- Linux：`~/.config/tempo/rules.toml`（`$XDG_CONFIG_HOME` 优先）
+- Windows：`%APPDATA%\tempo\rules.toml`
 
 示例：
 
@@ -129,7 +132,7 @@ cycle = 4
 
 - `finish_command` 为空时使用平台默认提醒。
 - `finish_on` 控制番茄钟中自定义命令在每阶段（`each`）还是整个序列（`sequence`）结束时执行，默认 `each`。
-- `[pomo]` 为全局默认参数，可被 `tempo pomo start` 的 CLI 参数覆盖。
+- `[pomodoro]` 为全局默认参数，可被 `tempo pomo start` 的 CLI 参数覆盖。
 
 ### 自定义结束命令示例
 
@@ -146,17 +149,30 @@ tempo start --name work -t 25m --finish "powershell -Command \"Add-Type -Assembl
 ```bash
 tempo pomo start --name focus --work 30m --short 5m --long 20m --cycle 3
 tempo pomo status
+tempo pomo next focus
 tempo pomo stop
 ```
 
-阶段自动切换：专注 → 短休 → 专注 → … → 长休 → 循环。`status` 输出当前阶段、已完成专注数和剩余时间。
+阶段切换需要确认：每个阶段结束时弹出「继续 / 停止 / 暂停」三选对话框 —— Linux 依次尝试 kdialog、zenity，Windows 使用 TaskDialog —— 选择后才进入下一阶段：
+
+- **继续**：立即开始下一阶段，循环 专注 → 短休 → 专注 → … → 长休 → 重新开始
+- **停止**：终止整个序列
+- **暂停**：序列进入等待状态并保留进度，之后可用 `tempo pomo next focus` 手动推进
+
+无交互工具可用时（无桌面环境）发送通知并自动继续，不中断序列。
+
+`status` 显示当前阶段、已完成专注数和剩余时间；等待确认时追加 `(waiting)`：
+
+```
+phase=work, completed=1/4, remaining=0s (waiting)
+```
 
 暂停/继续作用于当前阶段任务，周期进度不丢失。
 
 ## 日志
 
-- Linux：`~/.local/state/timer/timer.log`（systemd 托管时同时由 journald 收集 stdout）
-- Windows：`%LOCALAPPDATA%\timer\timer.log`
+- Linux：`~/.local/state/tempo/tempo.log`（`$XDG_STATE_HOME` 优先；systemd 托管时同时由 journald 收集 stdout）
+- Windows：`%USERPROFILE%\.local\state\tempo\tempo.log`
 
 记录 daemon 启停、任务状态变更、番茄钟阶段转换、通知发送结果和 IPC 错误。
 
@@ -164,15 +180,17 @@ tempo pomo stop
 
 ```
 tempo/
-├── main.go                  CLI 入口 + daemon 启动入口
+├── main.go                            CLI 入口 + daemon 启动入口
+├── main_linux.go / main_windows.go    平台入口：服务模式检测、install-service
 ├── internal/
-│   ├── protocol/            请求/响应结构
-│   ├── config/              TOML 规则配置
-│   ├── logging/             slog 初始化
-│   ├── daemon/              任务、管理器、番茄钟、请求分发
-│   ├── transport/           IPC（Linux Unix socket / Windows Named Pipe）
-│   ├── notify/              桌面提醒（notify-send / Toast / MessageBoxW）
-│   └── platform/            平台托管（systemd / Windows Service）
+│   ├── protocol/                      请求/响应结构
+│   ├── config/                        TOML 规则配置
+│   ├── logging/                       slog 初始化
+│   ├── client/                        IPC 客户端（CLI 侧）
+│   ├── daemon/                        任务、管理器、番茄钟、请求分发、阶段确认弹窗
+│   ├── transport/                     IPC（Linux Unix socket / Windows Named Pipe）
+│   ├── notify/                        桌面提醒（notify-send / Toast / MessageBoxW）
+│   └── platform/                      平台托管（systemd / Windows Service）
 └── contrib/
     └── tempo-daemon.service  Linux systemd unit
 ```
