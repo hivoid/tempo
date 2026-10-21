@@ -63,17 +63,16 @@ cycle = 3
 		t.Errorf("缺省 finish_on = %q, want %q", teaRule.FinishOn, FinishOnEach)
 	}
 
-	if cfg.Pomodoro.Work != 30*time.Minute {
-		t.Errorf("Pomodoro.Work = %v, want 30m", cfg.Pomodoro.Work)
+	// [pomodoro] 段保留原始字符串，经 PomodoroDefaults 解析为时长。
+	if cfg.Pomodoro.Work != "30m" || cfg.Pomodoro.ShortBreak != "5m" ||
+		cfg.Pomodoro.LongBreak != "15m" || cfg.Pomodoro.Cycle != 3 {
+		t.Errorf("Pomodoro 原始字段 = %+v", cfg.Pomodoro)
 	}
-	if cfg.Pomodoro.ShortBreak != 5*time.Minute {
-		t.Errorf("Pomodoro.ShortBreak = %v, want 5m", cfg.Pomodoro.ShortBreak)
-	}
-	if cfg.Pomodoro.LongBreak != 15*time.Minute {
-		t.Errorf("Pomodoro.LongBreak = %v, want 15m", cfg.Pomodoro.LongBreak)
-	}
-	if cfg.Pomodoro.Cycle != 3 {
-		t.Errorf("Pomodoro.Cycle = %d, want 3", cfg.Pomodoro.Cycle)
+	work, short, long, cycle := cfg.PomodoroDefaults()
+	if work != 30*time.Minute || short != 5*time.Minute ||
+		long != 15*time.Minute || cycle != 3 {
+		t.Errorf("PomodoroDefaults() = (%v, %v, %v, %d), want (30m, 5m, 15m, 3)",
+			work, short, long, cycle)
 	}
 }
 
@@ -115,20 +114,31 @@ finish_on = "sometimes"
 	}
 }
 
-func TestLoadInvalidPomodoroDuration(t *testing.T) {
+func TestPomodoroDefaultsFallback(t *testing.T) {
+	// [pomodoro] 时长为空、非法或非正、cycle 非正时回退内置默认值，Load 不报错。
 	path := writeConfig(t, `
 [pomodoro]
 work = "abc"
+short_break = "0s"
+long_break = ""
+cycle = -1
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "pomodoro.work") {
-		t.Errorf("非法番茄钟时长应报错，得到: %v", err)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("非法 [pomodoro] 不应使 Load 报错: %v", err)
+	}
+	defWork, defShort, defLong, defCycle := DefaultPomodoro()
+	work, short, long, cycle := cfg.PomodoroDefaults()
+	if work != defWork || short != defShort || long != defLong || cycle != defCycle {
+		t.Errorf("非法配置应全部回退默认值，得到 (%v, %v, %v, %d)",
+			work, short, long, cycle)
 	}
 }
 
 func TestDefaultPomodoro(t *testing.T) {
-	p := DefaultPomodoro()
-	if p.Work != 25*time.Minute || p.ShortBreak != 5*time.Minute ||
-		p.LongBreak != 15*time.Minute || p.Cycle != 4 {
-		t.Errorf("DefaultPomodoro() = %+v", p)
+	work, short, long, cycle := DefaultPomodoro()
+	if work != 25*time.Minute || short != 5*time.Minute ||
+		long != 15*time.Minute || cycle != 4 {
+		t.Errorf("DefaultPomodoro() = (%v, %v, %v, %d)", work, short, long, cycle)
 	}
 }
