@@ -51,12 +51,12 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	t.Fatalf("等待文件 %s 超时", path)
 }
 
-// overrideAskConfirm 将确认弹窗替换为固定返回 ok 的桩函数，测试结束后恢复。
+// overrideAskConfirm 将确认弹窗替换为固定返回 result 的桩函数，测试结束后恢复。
 // 真实 askConfirm 会阻塞等待用户交互（最长 promptTimeout），自动化测试必须打桩。
-func overrideAskConfirm(t *testing.T, ok bool) {
+func overrideAskConfirm(t *testing.T, result PromptResult) {
 	t.Helper()
 	old := askConfirmFn
-	askConfirmFn = func(*slog.Logger, string, string) bool { return ok }
+	askConfirmFn = func(*slog.Logger, string, string) PromptResult { return result }
 	t.Cleanup(func() { askConfirmFn = old })
 }
 
@@ -142,7 +142,7 @@ func TestPomodoroFillDefaults(t *testing.T) {
 // TestPomodoroWorkToShortBreak 验证专注正常完成后进入短休、completed 递增，
 // 且旧阶段任务被同名新任务替换。
 func TestPomodoroWorkToShortBreak(t *testing.T) {
-	overrideAskConfirm(t, true)
+	overrideAskConfirm(t, PromptContinue)
 	m := NewManager(nil, nil, nil)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Work:       30 * time.Millisecond,
@@ -169,7 +169,7 @@ func TestPomodoroWorkToShortBreak(t *testing.T) {
 
 // TestPomodoroLongBreakAfterCycle 验证每完成 Cycle 个专注后进入长休（验收 7）。
 func TestPomodoroLongBreakAfterCycle(t *testing.T) {
-	overrideAskConfirm(t, true)
+	overrideAskConfirm(t, PromptContinue)
 	m := NewManager(nil, nil, nil)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Work:       20 * time.Millisecond,
@@ -224,7 +224,7 @@ func TestPomodoroPauseKeepsProgress(t *testing.T) {
 // TestPomodoroEachFinishCommandRunsPerStage 验证 each 模式下每阶段结束执行
 // 规则的 finish_command。
 func TestPomodoroEachFinishCommandRunsPerStage(t *testing.T) {
-	overrideAskConfirm(t, false)
+	overrideAskConfirm(t, PromptPause)
 	flagFile := filepath.Join(t.TempDir(), "stage-done")
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
@@ -274,7 +274,7 @@ func TestPomodoroSequenceFinishCommandOnStop(t *testing.T) {
 // TestPomodoroFinishCommandFailureNotBlocking 验证 finish_command 失败仅记日志，
 // 不阻塞阶段推进（F12）；同时覆盖 FinishOn 缺省为 each。
 func TestPomodoroFinishCommandFailureNotBlocking(t *testing.T) {
-	overrideAskConfirm(t, true)
+	overrideAskConfirm(t, PromptContinue)
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
 			"pomo": {FinishCommand: "exit 3"},
@@ -297,7 +297,7 @@ func TestPomodoroFinishCommandFailureNotBlocking(t *testing.T) {
 // 已完成阶段、剩余归零、无活动任务），tempo pomodoro next 推进后进入
 // pendingPhase 对应阶段并清除 waiting。
 func TestPomodoroWaitingAndNext(t *testing.T) {
-	overrideAskConfirm(t, false)
+	overrideAskConfirm(t, PromptPause)
 	m := NewManager(nil, nil, nil)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Work:       30 * time.Millisecond,
@@ -339,7 +339,7 @@ func TestPomodoroNextGuarded(t *testing.T) {
 		t.Errorf("推进不存在的番茄钟应报错，得到: %v", err)
 	}
 
-	overrideAskConfirm(t, false)
+	overrideAskConfirm(t, PromptPause)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Work:       time.Hour, // 运行中不会结束，验证幂等
 		ShortBreak: time.Second,
@@ -351,4 +351,34 @@ func TestPomodoroNextGuarded(t *testing.T) {
 	if err := p.Advance(); err != nil {
 		t.Errorf("阶段任务运行中 Advance 应幂等返回 nil，得到: %v", err)
 	}
+}
+
+// TestPomodoroPromptStopTerminatesSequence 验证确认弹窗选择停止时：tracker 经
+// Manager.StopPomodoroInternal 从注册表移除、阶段任务清理，序列不再推进。
+func TestPomodoroPromptStopTerminatesSequence(t *testing.T) {
+	overrideAskConfirm(t, PromptStop)
+	m := NewManager(nil, nil, nil)
+	p := newPomodoroTracker("pomo", PomodoroOptions{
+		Work:       30 * time.Millisecond,
+		ShortBreak: time.Second,
+		LongBreak:  time.Second,
+		Cycle:      4,
+	}, m)
+	m.mu.Lock()
+	m.pomodoros["pomo"] = p
+	m.mu.Unlock()
+
+	// 停止由确认 goroutine 异步执行，轮询等待注册表移除。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		_, active := m.pomodoros["pomo"]
+		m.mu.Unlock()
+		if !active {
+			waitForTasks(t, m, 0, time.Second)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("确认选择停止后序列应从注册表移除")
 }

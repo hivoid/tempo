@@ -31,7 +31,7 @@ type PomodoroTracker struct {
 	completed    int    // 当前 cycle 内已完成专注数，0..Cycle，long_break 结束后归零
 	current      *Task  // 当前阶段任务；阶段切换间隙、待确认或停止后为 nil
 	stopped      bool   // 序列是否已被用户终止
-	waiting      bool   // 阶段结束待确认：等待用户确认或 tempo pomodoro next 推进
+	waiting      bool   // 阶段结束被暂停：等待 tempo pomo next 手动推进
 	pendingPhase string // 阶段结束即记录的下一阶段，Advance 时据此创建任务
 }
 
@@ -111,9 +111,9 @@ func (p *PomodoroTracker) removeCurrentTask() {
 
 // onStageComplete 是阶段任务正常结束的回调：从 Manager.tasks 移除已完成的阶段
 // 任务，按状态机计算下一阶段记入 pendingPhase，然后在独立 goroutine 中弹出
-// 确认框（F15、4.5 节）；用户确认后推进到下一阶段，拒绝或无法弹窗则进入
-// waiting，等待 tempo pomodoro next 手动推进。finish_command 仍按 FinishOn
-// 语义在阶段结束时调度，与确认流程互不影响。
+// 三选确认框（F15、4.5 节）；继续→推进到下一阶段，停止→终止整个序列，
+// 暂停（或无法弹窗）→进入 waiting，等待 tempo pomo next 手动推进。
+// finish_command 仍按 FinishOn 语义在阶段结束时调度，与确认流程互不影响。
 //
 // 本回调由 time.AfterFunc 触发，必须立即返回：确认弹窗最长阻塞 promptTimeout，
 // 因此放入独立 goroutine 执行，不占用定时器回调线程。
@@ -165,25 +165,35 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 	}
 
 	// 确认弹窗可能阻塞至用户响应（上限 promptTimeout），放入独立 goroutine，
-	// 不阻塞 time.AfterFunc 的回调线程；结果由 settleConfirm 统一结算。
+	// 不阻塞 time.AfterFunc 的回调线程；三态结果分别驱动推进/停止/等待。
 	go func() {
-		p.settleConfirm(confirm(p.mgr.logger, confirmTitle, confirmMessage))
+		result := confirm(p.mgr.logger, confirmTitle, confirmMessage)
+		switch result {
+		case PromptContinue:
+			if err := p.Advance(); err != nil {
+				p.mgr.logger.Error("推进番茄钟阶段失败",
+					"task", p.name,
+					"rule", p.opts.Rule,
+					"action", "pomodoro_advance",
+					"error", err)
+			}
+		case PromptStop:
+			// 弹窗中选择停止：经 Manager 从注册表移除并终止整个序列。
+			p.requestStop()
+		default:
+			// PromptPause 及异常值：进入 waiting，等待 tempo pomo next 手动推进。
+			p.setWaiting()
+		}
 	}()
 }
 
-// settleConfirm 结算阶段结束确认弹窗的结果：序列已停止或已被 tempo pomodoro next
-// 手动推进（current != nil）时忽略迟到结果；确认时推进到 pendingPhase 对应阶段，
-// 拒绝或无法弹窗时置 waiting，等待手动推进。
-func (p *PomodoroTracker) settleConfirm(ok bool) {
+// setWaiting 将序列置为 waiting：等待用户执行 tempo pomo next 手动推进。
+// 序列已停止、或结果已过期（弹窗打开期间序列已被 next 推进，current != nil）
+// 时忽略本结果，防止覆盖新状态。
+func (p *PomodoroTracker) setWaiting() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.stopped || p.current != nil {
-		return
-	}
-	if ok {
-		if err := p.advanceLocked(); err != nil {
-			p.mgr.logger.Error("推进番茄钟阶段失败", "task", p.name, "action", "pomodoro_advance", "error", err)
-		}
 		return
 	}
 	p.waiting = true
@@ -193,6 +203,20 @@ func (p *PomodoroTracker) settleConfirm(ok bool) {
 		"phase", p.phase,
 		"pending", p.pendingPhase,
 		"action", "pomodoro_waiting")
+}
+
+// requestStop 处理确认弹窗的停止选择：经 Manager 的 StopPomodoroInternal 从
+// 注册表移除并终止整个序列。须在未持有 p.mu 的上下文调用（确认 goroutine
+// 满足）；StopPomodoroInternal 按短暂持 m.mu 查删注册表、解锁后再调用
+// tracker.Stop 的顺序加锁，与 Manager.Stop 相同，不会形成锁序死锁。
+func (p *PomodoroTracker) requestStop() {
+	if err := p.mgr.StopPomodoroInternal(p.name); err != nil {
+		p.mgr.logger.Error("停止番茄钟序列失败",
+			"task", p.name,
+			"rule", p.opts.Rule,
+			"action", "pomodoro_stop",
+			"error", err)
+	}
 }
 
 // nextStageLocked 按 4.5 节状态机返回当前阶段结束后的下一阶段：专注完成后，
@@ -221,7 +245,7 @@ func (p *PomodoroTracker) stageDuration(phase string) time.Duration {
 	}
 }
 
-// Advance 推进到待确认的下一阶段（tempo pomodoro next）：处于 waiting 或确认
+// Advance 推进到待确认的下一阶段（tempo pomo next）：处于 waiting 或确认
 // 弹窗尚未返回时，根据 pendingPhase 创建下一阶段任务；当前阶段任务仍在运行时
 // 不做任何事（幂等）。序列已停止或无待推进阶段时返回错误。
 func (p *PomodoroTracker) Advance() error {
@@ -261,8 +285,8 @@ func (p *PomodoroTracker) advanceLocked() error {
 
 // Status 返回当前阶段与周期进度（F18）：phase 为当前阶段名，completed 为当前
 // cycle 内已完成的专注数（0..Cycle，长休结束后归零），cycle 为一个长休周期包含
-// 的专注数，remaining 为当前阶段任务剩余时长；waiting 表示阶段结束待确认，
-// 需 tempo pomodoro next 推进。
+// 的专注数，remaining 为当前阶段任务剩余时长；waiting 表示阶段结束被暂停，
+// 需 tempo pomo next 推进。
 func (p *PomodoroTracker) Status() protocol.PomodoroInfo {
 	p.mu.Lock()
 	defer p.mu.Unlock()

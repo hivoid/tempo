@@ -27,11 +27,11 @@ const usage = `tempo — CLI 计时器
   tempo pause NAME
   tempo resume NAME
   tempo stop NAME
-  tempo pomodoro start --name|-n NAME [--work 25m] [--short 5m] [--long 15m]
-                        [--cycle 4] [--rule|-r RULE] [--finish-on each|sequence]
-  tempo pomodoro status [NAME]                  查看当前阶段与周期进度
-  tempo pomodoro next NAME                      推进等待确认的下一阶段
-  tempo pomodoro stop [NAME]                    终止番茄钟序列
+  tempo pomo start --name|-n NAME [--work 25m] [--short 5m] [--long 15m]
+                    [--cycle 4] [--rule|-r RULE] [--finish-on each|sequence]
+  tempo pomo status [NAME]                      查看当前阶段与周期进度
+  tempo pomo next NAME                          推进等待确认的下一阶段
+  tempo pomo stop [NAME]                        终止番茄钟序列
 `
 
 func main() {
@@ -60,8 +60,8 @@ func main() {
 		err = runList(os.Args[2:])
 	case "pause", "resume", "stop":
 		err = runNamed(os.Args[1], os.Args[2:])
-	case "pomodoro":
-		err = runPomodoro(os.Args[2:])
+	case "pomo", "pomodoro": // pomodoro 为隐藏别名，保持向后兼容，不写入 usage
+		err = handlePomodoro(os.Args[2:])
 	case "install-service":
 		err = installService()
 	case "help", "-h", "--help":
@@ -184,10 +184,11 @@ func runNamed(action string, args []string) error {
 	return callAndReport(protocol.Request{Action: act, Name: fs.Arg(0)})
 }
 
-// runPomodoro 分发 pomodoro 子命令：start/status/stop。
-func runPomodoro(args []string) error {
+// handlePomodoro 分发 pomo 子命令：start/status/next/stop。主命令名为 pomo，
+// "pomodoro" 作为隐藏别名由 main 的 switch 一并映射到本函数。
+func handlePomodoro(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("pomodoro: 用法: tempo pomodoro {start|status|stop}")
+		return fmt.Errorf("pomo: 用法: tempo pomo {start|status|next|stop}")
 	}
 	switch args[0] {
 	case "start":
@@ -199,14 +200,14 @@ func runPomodoro(args []string) error {
 	case "stop":
 		return runPomodoroStop(args[1:])
 	default:
-		return fmt.Errorf("pomodoro: 未知子命令 %q，用法: tempo pomodoro {start|status|stop}", args[0])
+		return fmt.Errorf("pomo: 未知子命令 %q，用法: tempo pomo {start|status|next|stop}", args[0])
 	}
 }
 
 // runPomodoroStart 启动番茄钟序列。时长与 cycle 留空表示未设置，
 // 由 daemon 按 [pomodoro] 配置与内置默认值补全（PRD F17）。
 func runPomodoroStart(args []string) error {
-	fs := flag.NewFlagSet("pomodoro start", flag.ExitOnError)
+	fs := flag.NewFlagSet("pomo start", flag.ExitOnError)
 	var name, rule, finishOn, work, short, long, cycle string
 	fs.StringVar(&name, "name", "", "番茄钟名称")
 	fs.StringVar(&name, "n", "", "番茄钟名称（简写）")
@@ -221,7 +222,7 @@ func runPomodoroStart(args []string) error {
 		return err
 	}
 	if name == "" {
-		return fmt.Errorf("pomodoro start: 必须通过 --name/-n 指定番茄钟名称")
+		return fmt.Errorf("pomo start: 必须通过 --name/-n 指定番茄钟名称")
 	}
 
 	return callAndReport(protocol.Request{
@@ -241,12 +242,12 @@ func runPomodoroStart(args []string) error {
 // runPomodoroStatus 查询番茄钟状态。可选位置参数 NAME 指定序列；省略时由 daemon
 // 解析唯一活动序列，无活动番茄钟时输出 no active pomodoro。
 func runPomodoroStatus(args []string) error {
-	fs := flag.NewFlagSet("pomodoro status", flag.ExitOnError)
+	fs := flag.NewFlagSet("pomo status", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 1 {
-		return fmt.Errorf("pomodoro status: 用法: tempo pomodoro status [NAME]")
+		return fmt.Errorf("pomo status: 用法: tempo pomo status [NAME]")
 	}
 
 	resp, err := client.Call(protocol.Request{
@@ -266,7 +267,7 @@ func runPomodoroStatus(args []string) error {
 	p := resp.Pomodoro
 	suffix := ""
 	if p.Waiting {
-		// 阶段结束待确认，需要 tempo pomodoro next 手动推进。
+		// 阶段结束被暂停，需要 tempo pomo next 手动推进。
 		suffix = " (waiting)"
 	}
 	fmt.Printf("phase=%s, completed=%d/%d, remaining=%s%s\n",
@@ -277,12 +278,12 @@ func runPomodoroStatus(args []string) error {
 // runPomodoroNext 推进处于 waiting 状态的番茄钟到下一阶段：阶段结束确认被拒绝
 // 或无法弹窗后的手动恢复入口。
 func runPomodoroNext(args []string) error {
-	fs := flag.NewFlagSet("pomodoro next", flag.ExitOnError)
+	fs := flag.NewFlagSet("pomo next", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("pomodoro next: 用法: tempo pomodoro next NAME")
+		return fmt.Errorf("pomo next: 用法: tempo pomo next NAME")
 	}
 
 	return callAndReport(protocol.Request{
@@ -294,12 +295,12 @@ func runPomodoroNext(args []string) error {
 // runPomodoroStop 终止番茄钟序列。可选位置参数 NAME 指定序列；省略时由 daemon
 // 解析唯一活动序列，与普通 stop 一样走 IPC。
 func runPomodoroStop(args []string) error {
-	fs := flag.NewFlagSet("pomodoro stop", flag.ExitOnError)
+	fs := flag.NewFlagSet("pomo stop", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() > 1 {
-		return fmt.Errorf("pomodoro stop: 用法: tempo pomodoro stop [NAME]")
+		return fmt.Errorf("pomo stop: 用法: tempo pomo stop [NAME]")
 	}
 
 	return callAndReport(protocol.Request{

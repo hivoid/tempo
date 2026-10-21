@@ -246,7 +246,7 @@ func waitForPomodoroWaiting(t *testing.T, m *Manager, name string, timeout time.
 // TestDispatchPomodoroNext 验证 pomodoro_next 分发：阶段结束确认被拒进入 waiting
 // 后推进成功、waiting 清除；未知名称返回错误。
 func TestDispatchPomodoroNext(t *testing.T) {
-	overrideAskConfirm(t, false)
+	overrideAskConfirm(t, PromptPause)
 	m := NewManager(nil, nil, nil)
 
 	if resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroNext, Name: "ghost"}); resp.OK ||

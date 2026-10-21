@@ -258,6 +258,15 @@ func (m *Manager) PomodoroStatus(name string) (*protocol.PomodoroInfo, error) {
 // PomodoroStop 终止整个番茄钟序列并停止当前阶段任务（PRD F19）。
 // 序列停止日志与 sequence 模式的 finish_command 由 PomodoroTracker.Stop 处理。
 func (m *Manager) PomodoroStop(name string) error {
+	return m.StopPomodoroInternal(name)
+}
+
+// StopPomodoroInternal 从注册表移除指定番茄钟序列并终止它，供 IPC 层的
+// PomodoroStop 与 tracker 确认弹窗的停止路径（requestStop）共用：短暂持 m.mu
+// 查找并删除 m.pomodoros 条目，解锁后调用 tracker.Stop()（其内部再短暂持
+// m.mu 从 m.tasks 删除阶段任务）。不得在持有 tracker 锁（p.mu）时调用，
+// 否则会与 Stop 内部的加锁顺序互锁。
+func (m *Manager) StopPomodoroInternal(name string) error {
 	m.mu.Lock()
 	p, ok := m.pomodoros[name]
 	if ok {
@@ -271,8 +280,8 @@ func (m *Manager) PomodoroStop(name string) error {
 	return nil
 }
 
-// PomodoroNext 手动推进指定番茄钟到待确认的下一阶段：阶段结束确认被拒绝或
-// 无法弹窗时序列进入 waiting，由本方法作为恢复入口（对应 CLI tempo pomodoro next）。
+// PomodoroNext 手动推进指定番茄钟到待确认的下一阶段：阶段结束确认被暂停或
+// 无法弹窗时序列进入 waiting，由本方法作为恢复入口（对应 CLI tempo pomo next）。
 func (m *Manager) PomodoroNext(name string) error {
 	m.mu.Lock()
 	p, ok := m.pomodoros[name]
