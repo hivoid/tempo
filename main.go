@@ -139,9 +139,10 @@ func runList(args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATE\tREMAINING\tRULE")
+	// 逐行写失败无法补救，底层写入错误由 Flush 统一返回，显式忽略以满足 errcheck。
+	_, _ = fmt.Fprintln(w, "NAME\tSTATE\tREMAINING\tRULE")
 	for _, t := range resp.Tasks {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.Name, t.State, t.Remaining, t.Rule)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.Name, t.State, t.Remaining, t.Rule)
 	}
 	return w.Flush()
 }
