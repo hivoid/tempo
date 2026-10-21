@@ -80,14 +80,14 @@ tempo stop tea
 tempo daemon                                  前台运行 daemon（调试用）
 tempo install-service                         Linux 提示安装 systemd unit；Windows 安装 Service
 
-tempo start --name NAME [-t DUR] [--rule RULE] [--finish CMD]
+tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
 tempo list
 tempo pause NAME
 tempo resume NAME
 tempo stop NAME
 
-tempo pomo start --name NAME [--work 25m] [--short 5m] [--long 15m] [--cycle 4]
-                 [--rule RULE] [--finish-on each|sequence]
+tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
+                 [--cycle|-c 4] [--rule|-r RULE] [--finish-on each|sequence]
 tempo pomo status [NAME]                      等待确认时追加 (waiting)
 tempo pomo next NAME                          推进等待确认的下一阶段
 tempo pomo stop [NAME]
@@ -97,12 +97,12 @@ tempo pomo stop [NAME]
 
 | 选项                            | 说明                                                      |
 | ------------------------------- | --------------------------------------------------------- |
-| `--name`                        | 任务名称，后续管理使用，必填                              |
+| `--name` / `-n`                 | 任务名称，后续管理使用，必填                              |
 | `-t`                            | 时长，Go duration 格式，如 `25m`、`1h30m`                 |
-| `--rule`                        | 引用配置文件中的预置规则                                  |
-| `--finish`                      | 计时结束时执行的自定义命令，覆盖规则中的 `finish_command` |
-| `--work` / `--short` / `--long` | 番茄钟各阶段时长                                          |
-| `--cycle`                       | 每多少个专注后进入长休，默认 4                            |
+| `--rule` / `-r`                 | 引用配置文件中的预置规则                                  |
+| `--finish` / `-f`               | 计时结束时执行的自定义命令，覆盖规则中的 `finish_command` |
+| `--work` / `-w`、`--short` / `-s`、`--long` / `-l` | 番茄钟各阶段时长                       |
+| `--cycle` / `-c`                | 每多少个专注后进入长休，默认 4                            |
 | `--finish-on`                   | 番茄钟自定义命令的执行时机：`each`（每阶段）或 `sequence`（整个序列）；默认 `each` |
 
 ## 配置

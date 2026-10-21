@@ -80,14 +80,14 @@ When the timer finishes, a desktop notification is sent by default. After closin
 tempo daemon                                  Run the daemon in the foreground (debugging)
 tempo install-service                         Linux: print systemd unit install instructions; Windows: install the Service
 
-tempo start --name NAME [-t DUR] [--rule RULE] [--finish CMD]
+tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
 tempo list
 tempo pause NAME
 tempo resume NAME
 tempo stop NAME
 
-tempo pomo start --name NAME [--work 25m] [--short 5m] [--long 15m] [--cycle 4]
-                 [--rule RULE] [--finish-on each|sequence]
+tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
+                 [--cycle|-c 4] [--rule|-r RULE] [--finish-on each|sequence]
 tempo pomo status [NAME]                      appends (waiting) while waiting for confirmation
 tempo pomo next NAME                          advance the pending next phase
 tempo pomo stop [NAME]
@@ -97,12 +97,12 @@ tempo pomo stop [NAME]
 
 | Option                          | Description                                                                |
 | ------------------------------- | -------------------------------------------------------------------------- |
-| `--name`                        | Task name, used for later management; required                             |
+| `--name` / `-n`                 | Task name, used for later management; required                             |
 | `-t`                            | Duration in Go duration format, e.g. `25m`, `1h30m`                        |
-| `--rule`                        | Reference a preset rule from the config file                               |
-| `--finish`                      | Custom command to run on completion; overrides the rule's `finish_command` |
-| `--work` / `--short` / `--long` | Pomodoro phase durations                                                   |
-| `--cycle`                       | Number of work phases before a long break; default 4                       |
+| `--rule` / `-r`                 | Reference a preset rule from the config file                               |
+| `--finish` / `-f`               | Custom command to run on completion; overrides the rule's `finish_command` |
+| `--work` / `-w`, `--short` / `-s`, `--long` / `-l` | Pomodoro phase durations                                |
+| `--cycle` / `-c`                | Number of work phases before a long break; default 4                       |
 | `--finish-on`                   | When the Pomodoro custom command runs: `each` (every phase) or `sequence` (whole sequence); default `each` |
 
 ## Configuration

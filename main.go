@@ -22,13 +22,13 @@ const usage = `tempo — CLI 计时器
 用法：
   tempo daemon                                  前台运行 daemon（调试）
   tempo install-service                         安装系统服务（Windows 实际安装；Linux 打印手动安装提示）
-  tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish CMD]
+  tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
   tempo list                                    列出所有活动任务
   tempo pause NAME
   tempo resume NAME
   tempo stop NAME
-  tempo pomo start --name|-n NAME [--work 25m] [--short 5m] [--long 15m]
-                    [--cycle 4] [--rule|-r RULE] [--finish-on each|sequence]
+  tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
+                    [--cycle|-c 4] [--rule|-r RULE] [--finish-on each|sequence]
   tempo pomo status [NAME]                      查看当前阶段与周期进度
   tempo pomo next NAME                          推进等待确认的下一阶段
   tempo pomo stop [NAME]                        终止番茄钟序列
@@ -120,6 +120,7 @@ func runStart(args []string) error {
 	fs.StringVar(&rule, "r", "", "预置规则名称（简写）")
 	fs.StringVar(&duration, "t", "", "计时时长，如 25m")
 	fs.StringVar(&finish, "finish", "", "自定义结束命令")
+	fs.StringVar(&finish, "f", "", "自定义结束命令（简写）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -215,9 +216,13 @@ func runPomodoroStart(args []string) error {
 	fs.StringVar(&rule, "r", "", "预置规则名称（简写）")
 	fs.StringVar(&finishOn, "finish-on", "", "自定义命令执行时机: each | sequence（缺省 each）")
 	fs.StringVar(&work, "work", "", "专注时长，如 25m")
+	fs.StringVar(&work, "w", "", "专注时长（简写）")
 	fs.StringVar(&short, "short", "", "短休时长，如 5m")
+	fs.StringVar(&short, "s", "", "短休时长（简写）")
 	fs.StringVar(&long, "long", "", "长休时长，如 15m")
+	fs.StringVar(&long, "l", "", "长休时长（简写）")
 	fs.StringVar(&cycle, "cycle", "", "一个长休周期包含的专注次数")
+	fs.StringVar(&cycle, "c", "", "一个长休周期包含的专注次数（简写）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
