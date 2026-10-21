@@ -305,6 +305,12 @@ func TestPomodoroWaitingAndNext(t *testing.T) {
 		LongBreak:  time.Second,
 		Cycle:      4,
 	}, m)
+	// newPomodoroTracker 只创建 tracker 并注册阶段任务；写入 m.pomodoros 是
+	// Manager.PomodoroStart 的职责。测试直接构造 tracker 时需补注册，否则
+	// Manager 层的 PomodoroNext/PomodoroStatus 查不到该序列。
+	m.mu.Lock()
+	m.pomodoros["pomo"] = p
+	m.mu.Unlock()
 
 	waitForWaiting(t, p, 2*time.Second)
 	st := p.Status()
