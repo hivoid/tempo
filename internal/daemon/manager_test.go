@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,6 +209,96 @@ func TestFormatRemaining(t *testing.T) {
 	for d, want := range cases {
 		if got := formatRemaining(d); got != want {
 			t.Errorf("formatRemaining(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// syncBuffer 是并发安全的 bytes.Buffer：计时器 goroutine 写日志、
+// 测试 goroutine 轮询读取，需要互斥保护以通过 -race。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func (s *syncBuffer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.buf.Reset()
+}
+
+// newRecordingLogger 返回写入 buf 的 *slog.Logger，供日志内容断言使用。
+func newRecordingLogger(buf *syncBuffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, nil))
+}
+
+// TestStartLogsTaskData 验证启动任务时记录名称、规则、实际时长与结束命令。
+func TestStartLogsTaskData(t *testing.T) {
+	buf := &syncBuffer{}
+	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
+
+	if err := m.Start("tea", "", "10m", "notify-done"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"task=tea", "duration=10m0s", "finish=notify-done", "action=start"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("启动日志缺少 %q，实际输出：%s", want, out)
+		}
+	}
+}
+
+// TestStopLogsTrigger 验证手动停止记录触发来源 manual。
+func TestStopLogsTrigger(t *testing.T) {
+	buf := &syncBuffer{}
+	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
+	if err := m.Start("tea", "", "10m", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	buf.Reset()
+
+	if err := m.Stop("tea"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"task=tea", "trigger=manual", "action=stop"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("停止日志缺少 %q，实际输出：%s", want, out)
+		}
+	}
+}
+
+// TestFinishLogsTrigger 验证计时到点记录触发来源 timer。
+func TestFinishLogsTrigger(t *testing.T) {
+	buf := &syncBuffer{}
+	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
+	if err := m.Start("tea", "", "10ms", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// 轮询等待计时器到点触发 onTaskFinish 写入结束日志。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(buf.String(), "action=finish") {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"task=tea", "trigger=timer", "action=finish"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("结束日志缺少 %q，实际输出：%s", want, out)
 		}
 	}
 }
