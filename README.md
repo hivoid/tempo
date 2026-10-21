@@ -51,6 +51,15 @@ systemctl --user daemon-reload
 systemctl --user enable --now tempo-daemon
 ```
 
+The unit binds the daemon to the graphical session (`graphical-session.target`), so it starts and stops with your desktop session and restarts automatically on failure. `ExecStart` expects the binary at `~/.local/bin/tempo`; adjust it if you installed the binary elsewhere. On headless machines (tty / SSH only), replace `graphical-session.target` with `default.target`.
+
+Check status and follow the logs:
+
+```bash
+systemctl --user status tempo-daemon
+journalctl --user -u tempo-daemon -f
+```
+
 **Windows**:
 
 ```powershell

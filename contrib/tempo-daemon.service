@@ -1,0 +1,29 @@
+# tempo 守护进程的 systemd 用户单元。
+#
+# 安装（与 `tempo install-service` 在 Linux 上的提示一致）：
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/tempo-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now tempo-daemon.service
+#
+# ExecStart 默认指向 ~/.local/bin/tempo，若安装在其他位置请相应修改。
+# 无图形会话的环境（纯 tty / SSH）可将下方 graphical-session.target
+# 全部替换为 default.target。
+
+[Unit]
+Description=tempo 计时守护进程
+# IPC socket 位于 XDG_RUNTIME_DIR，随用户会话生灭；
+# 通知与确认弹窗依赖图形会话内的 notify-send / kdialog，
+# 因此让服务跟随图形会话启停。
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/tempo daemon
+# 异常退出时自动拉起；systemctl --user stop 不会触发重启
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target
