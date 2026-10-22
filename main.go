@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"text/tabwriter"
+	"time"
 
 	"tempo/internal/client"
 	"tempo/internal/config"
@@ -102,6 +104,8 @@ func main() {
 		err = runNamed(os.Args[1], os.Args[2:])
 	case "pomo", "pomodoro": // pomodoro 为隐藏别名，保持向后兼容，不写入 usage
 		err = handlePomodoro(os.Args[2:])
+	case "__notify": // 隐藏辅助命令：Windows 服务在用户会话中拉起以显示通知，不写入 usage
+		err = runHiddenNotify(os.Args[2:])
 	case "install-service":
 		err = installService()
 	case "uninstall-service":
@@ -356,6 +360,21 @@ func runPomodoroStop(args []string) error {
 		Action: protocol.ActionPomodoroStop,
 		Name:   fs.Arg(0),
 	})
+}
+
+// runHiddenNotify 实现隐藏辅助命令 __notify：由 Windows 服务（Session 0）在
+// 活动用户会话中拉起，负责在用户桌面显示通知。参数依次为 title、message 与以
+// 毫秒计的建议显示时长，均为固定位置参数（内部命令，不对外承诺稳定性）；
+// 子命令名须与 internal/notify/notify_windows.go 的 hiddenNotifyCmd 保持一致。
+func runHiddenNotify(args []string) error {
+	if len(args) != 3 {
+		return fmt.Errorf("__notify: 用法: tempo __notify TITLE MESSAGE DURATION_MS")
+	}
+	durationMs, err := strconv.Atoi(args[2])
+	if err != nil {
+		return fmt.Errorf("__notify: 解析显示时长 %q: %w", args[2], err)
+	}
+	return notify.NewNotifier().Notify(args[0], args[1], time.Duration(durationMs)*time.Millisecond)
 }
 
 // callAndReport 发送请求并按响应输出结果，失败响应转为错误返回。

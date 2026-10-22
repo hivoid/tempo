@@ -1,13 +1,18 @@
 //go:build windows
 
 // Package platform 提供 daemon 托管方式的平台适配：Windows 上将 daemon
-// 注册为系统服务，由 SCM（服务控制管理器）驱动其生命周期。
+// 注册为系统服务，由 SCM（服务控制管理器）驱动其生命周期；同时提供在活动
+// 用户会话中启动辅助进程的能力，供 Session 0 中的服务进程呈现通知等 UI。
 package platform
 
 import (
 	"fmt"
+	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -148,4 +153,86 @@ func waitServiceStopped(s *mgr.Service, timeout time.Duration) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// userenv.dll 提供「加载用户环境块」；x/sys/windows 未封装，按需声明。
+var (
+	modUserenv                  = syscall.NewLazyDLL("userenv.dll")
+	procCreateEnvironmentBlock  = modUserenv.NewProc("CreateEnvironmentBlock")
+	procDestroyEnvironmentBlock = modUserenv.NewProc("DestroyEnvironmentBlock")
+)
+
+// CreateProcessAsUserW 的创建标志：CREATE_NO_WINDOW 避免辅助进程在用户桌面
+// 闪现控制台窗口；CREATE_UNICODE_ENVIRONMENT 声明环境块为 Unicode 格式。
+const (
+	createNoWindow           = 0x08000000
+	createUnicodeEnvironment = 0x00000400
+)
+
+// LaunchInUserSession 在活动控制台会话中以登录用户身份启动 exePath（args 为
+// 参数列表，按 Windows 规则转义），供 Session 0 中的服务进程把通知等 UI 呈现
+// 到用户桌面。进程异步启动、不等待其退出，避免阻塞计时流程。需要
+// SE_TCB_NAME 特权（LocalSystem 服务默认具备）。
+func LaunchInUserSession(exePath string, args ...string) error {
+	sessionID := windows.WTSGetActiveConsoleSessionId()
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(sessionID, &token); err != nil {
+		return fmt.Errorf("获取会话 %d 的用户令牌: %w", sessionID, err)
+	}
+	// Close 失败无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = token.Close() }()
+
+	// 加载用户环境（PATH、APPDATA 等），辅助进程里的 Toast/PowerShell 依赖
+	// 它们；加载失败不阻断启动，回退为继承服务进程的环境。
+	env, _ := createEnvironmentBlock(token)
+	if env != nil {
+		defer destroyEnvironmentBlock(env)
+	}
+
+	argv := make([]string, 0, len(args)+1)
+	argv = append(argv, syscall.EscapeArg(exePath))
+	for _, a := range args {
+		argv = append(argv, syscall.EscapeArg(a))
+	}
+	cmdline, err := windows.UTF16PtrFromString(strings.Join(argv, " "))
+	if err != nil {
+		return fmt.Errorf("构造辅助进程命令行: %w", err)
+	}
+	exePtr, err := windows.UTF16PtrFromString(exePath)
+	if err != nil {
+		return fmt.Errorf("构造辅助进程路径: %w", err)
+	}
+
+	si := &windows.StartupInfo{}
+	pi := &windows.ProcessInformation{}
+	if err := windows.CreateProcessAsUser(token, exePtr, cmdline, nil, nil, false,
+		createNoWindow|createUnicodeEnvironment, env, nil, si, pi); err != nil {
+		return fmt.Errorf("在用户会话 %d 中启动 %s: %w", sessionID, exePath, err)
+	}
+	// 异步模式下立即关闭进程与主线程句柄，避免句柄泄漏；关闭失败无法补救，
+	// 显式忽略以满足 errcheck。
+	_ = windows.CloseHandle(pi.ThreadHandle)
+	_ = windows.CloseHandle(pi.ProcessHandle)
+	return nil
+}
+
+// createEnvironmentBlock 加载用户环境变量块；返回值须传给
+// destroyEnvironmentBlock 释放。
+func createEnvironmentBlock(token windows.Token) (*uint16, error) {
+	var env *uint16
+	r1, _, callErr := procCreateEnvironmentBlock.Call(
+		uintptr(unsafe.Pointer(&env)),
+		uintptr(token),
+		0, // bInherit：FALSE，不叠加当前进程（服务）的环境
+	)
+	if r1 == 0 {
+		return nil, fmt.Errorf("加载用户环境: %v", callErr)
+	}
+	return env, nil
+}
+
+// destroyEnvironmentBlock 释放 createEnvironmentBlock 返回的环境块。
+func destroyEnvironmentBlock(env *uint16) {
+	// 释放失败的错误无法补救，显式忽略以满足 errcheck。
+	_, _, _ = procDestroyEnvironmentBlock.Call(uintptr(unsafe.Pointer(env)))
 }
