@@ -293,7 +293,8 @@ func runPomodoroStart(args []string) error {
 }
 
 // runPomodoroStatus 查询番茄钟状态。可选位置参数 NAME 指定序列；省略时由 daemon
-// 解析唯一活动序列，无活动番茄钟时输出 no active pomodoro。
+// 解析唯一活动序列，无活动番茄钟时输出 no active pomodoro，命中时输出
+// name=NAME, phase=..., completed=N/M, remaining=DUR。
 func runPomodoroStatus(args []string) error {
 	fs := flag.NewFlagSet("pomo status", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
@@ -323,8 +324,8 @@ func runPomodoroStatus(args []string) error {
 		// 阶段结束被暂停，需要 tempo pomo next 手动推进。
 		suffix = " (waiting)"
 	}
-	fmt.Printf("phase=%s, completed=%d/%d, remaining=%s%s\n",
-		p.Phase, p.Completed, p.Cycle, p.Remaining, suffix)
+	fmt.Printf("name=%s, phase=%s, completed=%d/%d, remaining=%s%s\n",
+		p.Name, p.Phase, p.Completed, p.Cycle, p.Remaining, suffix)
 	return nil
 }
 

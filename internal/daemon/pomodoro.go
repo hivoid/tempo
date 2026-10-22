@@ -325,7 +325,8 @@ func (p *PomodoroTracker) advanceLocked() error {
 	return nil
 }
 
-// Status 返回当前阶段与周期进度（F18）：phase 为当前阶段名，completed 为当前
+// Status 返回当前阶段与周期进度（F18）：name 为序列名称（同时是当前阶段任务
+// 名，与 tempo list 中的任务名一致），phase 为当前阶段名，completed 为当前
 // cycle 内已完成的专注数（0..Cycle，长休结束后归零），cycle 为一个长休周期包含
 // 的专注数，remaining 为当前阶段任务剩余时长；waiting 表示阶段结束被暂停，
 // 需 tempo pomo next 推进。
@@ -338,6 +339,7 @@ func (p *PomodoroTracker) Status() protocol.PomodoroInfo {
 		remaining = formatRemaining(p.current.Remaining())
 	}
 	return protocol.PomodoroInfo{
+		Name:      p.name,
 		Phase:     p.phase,
 		Completed: p.completed,
 		Cycle:     p.opts.Cycle,

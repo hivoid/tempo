@@ -26,6 +26,7 @@ type TaskInfo struct {
 
 // PomodoroInfo 描述番茄钟的当前阶段与周期进度。
 type PomodoroInfo struct {
+	Name      string `json:"name,omitempty"` // 序列名称，同时是当前阶段任务名
 	Phase     string `json:"phase"` // "work" | "short_break" | "long_break"
 	Completed int    `json:"completed"`
 	Cycle     int    `json:"cycle"`
