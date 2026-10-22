@@ -65,7 +65,7 @@ func relayToUserSession(title, message string, duration time.Duration) error {
 	)
 }
 
-// sendToast 通过 jimbertools/toast 发送 Toast 通知：建议显示时长超过
+// sendToast 通过 go-toast/toast 发送 Toast 通知：建议显示时长超过
 // toastLongThreshold 时映射为 long，否则为 short。
 func sendToast(title, message string, duration time.Duration) error {
 	d := toast.Short
