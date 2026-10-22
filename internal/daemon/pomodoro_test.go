@@ -88,8 +88,8 @@ func TestPomodoroStartsInWorkPhase(t *testing.T) {
 	if st.Phase != phaseWork || st.Completed != 0 || st.Cycle != 4 {
 		t.Errorf("初始状态 = %+v, want phase=work completed=0 cycle=4", st)
 	}
-	if st.Remaining == "" || st.Remaining == "0s" {
-		t.Errorf("初始剩余时长异常: %q", st.Remaining)
+	if st.Remaining <= 0 {
+		t.Errorf("初始剩余时长异常: %v", st.Remaining)
 	}
 	waitForTasks(t, m, 1, time.Second)
 	if tasks := m.List(); tasks[0].Name != "pomo" || tasks[0].State != "running" {
@@ -158,8 +158,8 @@ func TestPomodoroWorkToShortBreak(t *testing.T) {
 	if st.Completed != 1 {
 		t.Errorf("completed = %d, want 1", st.Completed)
 	}
-	if st.Remaining == "" || st.Remaining == "0s" {
-		t.Errorf("短休应已开始计时: %q", st.Remaining)
+	if st.Remaining <= 0 {
+		t.Errorf("短休应已开始计时: %v", st.Remaining)
 	}
 	if tasks := m.List(); tasks[0].Name != "pomo" {
 		t.Errorf("阶段任务应以序列名注册: %+v", tasks)
@@ -314,8 +314,8 @@ func TestPomodoroWaitingAndNext(t *testing.T) {
 
 	waitForWaiting(t, p, 2*time.Second)
 	st := p.Status()
-	if !st.Waiting || st.Phase != phaseWork || st.Completed != 1 || st.Remaining != "0s" {
-		t.Errorf("waiting 状态 = %+v, want waiting=true phase=work completed=1 remaining=0s", st)
+	if !st.Waiting || st.Phase != phaseWork || st.Completed != 1 || st.Remaining != 0 {
+		t.Errorf("waiting 状态 = %+v, want waiting=true phase=work completed=1 remaining=0", st)
 	}
 	waitForTasks(t, m, 0, time.Second)
 
@@ -354,7 +354,7 @@ func TestPomodoroNextGuarded(t *testing.T) {
 }
 
 // TestPomodoroPromptStopTerminatesSequence 验证确认弹窗选择停止时：tracker 经
-// Manager.StopPomodoroInternal 从注册表移除、阶段任务清理，序列不再推进。
+// Manager.PomodoroStop 从注册表移除、阶段任务清理，序列不再推进。
 func TestPomodoroPromptStopTerminatesSequence(t *testing.T) {
 	overrideAskConfirm(t, PromptStop)
 	m := NewManager(nil, nil, nil)
