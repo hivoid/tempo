@@ -210,9 +210,10 @@ func LaunchInUserSession(exePath string, args ...string) error {
 		return fmt.Errorf("在用户会话 %d 中启动 %s: %w", sessionID, exePath, err)
 	}
 	// 异步模式下立即关闭进程与主线程句柄，避免句柄泄漏；关闭失败无法补救，
-	// 显式忽略以满足 errcheck。
-	_ = windows.CloseHandle(pi.ThreadHandle)
-	_ = windows.CloseHandle(pi.ProcessHandle)
+	// 显式忽略以满足 errcheck。注意 x/sys/windows 将 PROCESS_INFORMATION 的
+	// hProcess/hThread 封装为 Process/Thread 字段，并非 Win32 原生命名。
+	_ = windows.CloseHandle(pi.Thread)
+	_ = windows.CloseHandle(pi.Process)
 	return nil
 }
 
