@@ -30,3 +30,13 @@ func InstallService(name, displayName, exePath string) error {
 	fmt.Println("  4. systemctl --user enable --now tempo.service")
 	return nil
 }
+
+// RemoveService 在 Linux 上打印 systemd 用户服务的手动卸载步骤并返回 nil：
+// 与 InstallService 对应，unit 文件由用户自行管理，本工具不做实际改动。
+func RemoveService(name string) error {
+	fmt.Println("Linux 平台请手动卸载 systemd 用户服务：")
+	fmt.Println("  1. systemctl --user disable --now tempo.service")
+	fmt.Println("  2. rm ~/.config/systemd/user/tempo.service")
+	fmt.Println("  3. systemctl --user daemon-reload")
+	return nil
+}

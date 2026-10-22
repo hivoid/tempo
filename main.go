@@ -23,6 +23,7 @@ const usage = `tempo — CLI 计时器
 用法：
   tempo daemon                                  前台运行 daemon（调试）
   tempo install-service                         安装系统服务（Windows 实际安装；Linux 打印手动安装提示）
+  tempo uninstall-service                       卸载系统服务（Windows 实际卸载；Linux 打印手动卸载提示）
   tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
   tempo list                                    列出所有活动任务
   tempo pause NAME
@@ -66,6 +67,13 @@ func installService() error {
 	return platform.InstallService(serviceName, "tempo daemon", exePath)
 }
 
+// uninstallService 卸载系统服务：Windows 上删除已注册的 Windows Service
+// （需要管理员权限，服务运行中会先请求停止并等待至多 10 秒）；Linux 上打印
+// systemd unit 手动卸载步骤。具体行为由 internal/platform 按平台实现决定。
+func uninstallService() error {
+	return platform.RemoveService(serviceName)
+}
+
 func main() {
 	// 单二进制双模式（CONTEXT.md §5.7）：Windows 上进程由 SCM 启动时进入服务
 	// 运行循环，不按 CLI 处理；Linux 上该检查恒为 false。
@@ -96,6 +104,8 @@ func main() {
 		err = handlePomodoro(os.Args[2:])
 	case "install-service":
 		err = installService()
+	case "uninstall-service":
+		err = uninstallService()
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return
