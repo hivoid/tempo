@@ -20,10 +20,14 @@ import (
 	"tempo/internal/protocol"
 )
 
+// version 由构建时通过 -ldflags "-X main.version=..." 注入，未注入时显示 dev。
+var version = "dev"
+
 const usage = `tempo — CLI 计时器
 
 用法：
   tempo daemon                                  前台运行 daemon（调试）
+  tempo version                                 打印版本号
   tempo install-service                         安装系统服务（Windows 实际安装；Linux 打印手动安装提示）
   tempo uninstall-service                       卸载系统服务（Windows 实际卸载；Linux 打印手动卸载提示）
   tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
@@ -110,6 +114,9 @@ func main() {
 		err = installService()
 	case "uninstall-service":
 		err = uninstallService()
+	case "version":
+		fmt.Printf("tempo %s\n", version)
+		return
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return

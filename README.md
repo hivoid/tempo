@@ -88,6 +88,7 @@ When the timer finishes, a desktop notification is sent by default. After closin
 
 ```
 tempo daemon                                  Run the daemon in the foreground (debugging)
+tempo version                                 Print the version
 tempo install-service                         Linux: print systemd unit install instructions; Windows: install the Service
 
 tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
@@ -210,6 +211,9 @@ tempo/
 go build ./...
 go test ./...
 go vet ./...
+
+# Build with a version string (reported by `tempo version`)
+go build -ldflags "-X main.version=v1.0.0" -o tempo .
 
 # Cross-compile for Windows
 GOOS=windows GOARCH=amd64 go build ./...
