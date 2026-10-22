@@ -1,12 +1,21 @@
 package daemon
 
-// 三选确认弹窗（继续/停止/暂停）：本文件提供平台无关入口与三态结果类型，
-// 平台实现按 build tag 隔离并各自提供同名 askConfirmPlatform：
+// 三选确认弹窗（继续/停止/暂停）：本文件提供平台无关入口、三态结果类型与
+// 两平台共享的等待超时常量，平台实现按 build tag 隔离并各自提供同名
+// askConfirmPlatform：
 //   - Linux（prompt_linux.go）：kdialog → zenity → notify-send 依次探测回退；
 //   - Windows（prompt_windows.go）：TaskDialogIndirect 三按钮对话框，
 //     加载失败时回退 MessageBoxW，仍不可用则自动继续。
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
+
+// promptTimeout 限制单次确认弹窗的等待时长：Linux 侧约束确认命令的执行时长，
+// Windows 侧作为 WTSSendMessage 弹窗的自动关闭超时（serviceConfirm 同步等待
+// 至多此时长）。超时后由各平台实现按各自的回退语义处理。
+const promptTimeout = 5 * time.Minute
 
 // PromptResult 是阶段结束确认弹窗的三态结果。
 type PromptResult int

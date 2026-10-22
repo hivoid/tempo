@@ -11,11 +11,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
-	"time"
 )
-
-// promptTimeout 限制单次确认命令的等待时长，超时按执行失败处理、继续回退。
-const promptTimeout = 5 * time.Minute
 
 // askConfirmPlatform 弹出三选确认框（继续/停止/暂停），返回用户选择：
 //   - kdialog --yesnocancel 可用时以退出码映射：0 继续、1 停止、2 暂停；
