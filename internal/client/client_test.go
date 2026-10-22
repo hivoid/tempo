@@ -29,7 +29,7 @@ func startFakeDaemon(t *testing.T, path string, handler func(c net.Conn)) {
 	if err != nil {
 		t.Fatalf("启动假 daemon: %v", err)
 	}
-	t.Cleanup(func() { l.Close() })
+	t.Cleanup(func() { _ = l.Close() })
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -44,7 +44,8 @@ func startFakeDaemon(t *testing.T, path string, handler func(c net.Conn)) {
 func TestCallRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fake.sock")
 	startFakeDaemon(t, path, func(c net.Conn) {
-		defer c.Close()
+		// 关闭失败无法补救，显式忽略以满足 errcheck。
+		defer func() { _ = c.Close() }()
 		var req protocol.Request
 		if err := json.NewDecoder(bufio.NewReader(c)).Decode(&req); err != nil {
 			return
@@ -82,7 +83,7 @@ func TestCallTimesOutWhenDaemonSilent(t *testing.T) {
 	startFakeDaemon(t, path, func(c net.Conn) {
 		// 故意不读取也不响应，模拟 daemon 挂起。
 		time.Sleep(5 * time.Second)
-		c.Close()
+		_ = c.Close()
 	})
 	overrideSocketPath(t, path)
 
