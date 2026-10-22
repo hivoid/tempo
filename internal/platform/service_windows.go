@@ -2,7 +2,8 @@
 
 // Package platform 提供 daemon 托管方式的平台适配：Windows 上将 daemon
 // 注册为系统服务，由 SCM（服务控制管理器）驱动其生命周期；同时提供在活动
-// 用户会话中启动辅助进程的能力，供 Session 0 中的服务进程呈现通知等 UI。
+// 用户会话中启动辅助进程、或直接向用户会话发送消息框（WTSSendMessage）的
+// 能力，供 Session 0 中的服务进程呈现通知等 UI。
 package platform
 
 import (
@@ -171,8 +172,10 @@ const (
 
 // LaunchInUserSession 在活动控制台会话中以登录用户身份启动 exePath（args 为
 // 参数列表，按 Windows 规则转义），供 Session 0 中的服务进程把通知等 UI 呈现
-// 到用户桌面。进程异步启动、不等待其退出，避免阻塞计时流程。需要
-// SE_TCB_NAME 特权（LocalSystem 服务默认具备）。
+// 到用户桌面。进程异步启动、不等待其退出，避免阻塞计时流程。辅助进程固定
+// 落在 WinSta0\Default 桌面：不显式指定会继承服务（Session 0）的隐形窗口站，
+// 出现「进程已拉起但窗口不显示」。需要 SE_TCB_NAME 特权（LocalSystem 服务
+// 默认具备）。
 func LaunchInUserSession(exePath string, args ...string) error {
 	sessionID := windows.WTSGetActiveConsoleSessionId()
 	var token windows.Token
@@ -203,7 +206,13 @@ func LaunchInUserSession(exePath string, args ...string) error {
 		return fmt.Errorf("构造辅助进程路径: %w", err)
 	}
 
-	si := &windows.StartupInfo{}
+	// 显式指定用户桌面：不传 lpDesktop 时辅助进程继承服务的隐形窗口站，
+	// 这里落到目标令牌所属会话的交互桌面上，Toast 才可见。
+	desktop, err := windows.UTF16PtrFromString(`WinSta0\Default`)
+	if err != nil {
+		return fmt.Errorf("构造用户桌面名: %w", err)
+	}
+	si := &windows.StartupInfo{Desktop: desktop}
 	pi := &windows.ProcessInformation{}
 	if err := windows.CreateProcessAsUser(token, exePtr, cmdline, nil, nil, false,
 		createNoWindow|createUnicodeEnvironment, env, nil, si, pi); err != nil {
@@ -236,4 +245,70 @@ func createEnvironmentBlock(token windows.Token) (*uint16, error) {
 func destroyEnvironmentBlock(env *uint16) {
 	// 释放失败的错误无法补救，显式忽略以满足 errcheck。
 	_, _, _ = procDestroyEnvironmentBlock.Call(uintptr(unsafe.Pointer(env)))
+}
+
+// wtsapi32.dll 提供「向指定会话发送消息框」；x/sys/windows 未封装
+// WTSSendMessage，按需声明（统一使用 W 版本传 Unicode）。
+var (
+	modWtsapi32        = syscall.NewLazyDLL("wtsapi32.dll")
+	procWTSSendMessage = modWtsapi32.NewProc("WTSSendMessageW")
+)
+
+// MessageBox 按钮样式与返回值（winuser.h / wtsapi32）：SendMessageToUserSession
+// 的 style 参数与返回的按钮 ID 取值于此。
+const (
+	MBOk          uint32 = 0x0 // 单个「确定」按钮
+	MBYesNoCancel uint32 = 0x3 // MB_YESNOCANCEL：是/否/取消三按钮
+
+	IDCancel  = 2    // IDCANCEL：用户按 Esc 或关闭窗口
+	IDYes     = 6    // IDYES：「是」
+	IDNo      = 7    // IDNO：「否」
+	IDTimeout = 32001 // IDTIMEOUT：WTSSendMessage 自动关闭超时
+)
+
+// SendMessageToUserSession 在活动控制台会话的桌面上弹出经典消息框（样式语义
+// 同 MessageBoxW），供 Session 0 中的服务进程向登录用户呈现提示。style 为
+// MB_* 按钮组合；wait 为 true 时阻塞至用户选择或 timeout 到期，返回所按按钮
+// ID（IDYES/IDNO/IDCANCEL/IDTIMEOUT）；wait 为 false 时立即返回（返回值 0），
+// 消息框在用户关闭或 timeout 到期后自行消失。timeout 为 0 表示不自动关闭。
+// 无活动控制台会话（如无人登录）或发送失败时返回错误。
+func SendMessageToUserSession(title, message string, style uint32, timeout time.Duration, wait bool) (int, error) {
+	sessionID := windows.WTSGetActiveConsoleSessionId()
+	titleUTF16, err := windows.UTF16FromString(title)
+	if err != nil {
+		return 0, fmt.Errorf("编码消息框标题: %w", err)
+	}
+	textUTF16, err := windows.UTF16FromString(message)
+	if err != nil {
+		return 0, fmt.Errorf("编码消息框内容: %w", err)
+	}
+	// Title/MessageLength 以字节计，不含 NUL 终止符（与 lstrlen 同义）。
+	titleLen := uint32((len(titleUTF16) - 1) * 2)
+	textLen := uint32((len(textUTF16) - 1) * 2)
+
+	var response uint32
+	r1, _, callErr := procWTSSendMessage.Call(
+		0, // hServer：WTS_CURRENT_SERVER_HANDLE，本机
+		uintptr(sessionID),
+		uintptr(unsafe.Pointer(&titleUTF16[0])),
+		uintptr(titleLen),
+		uintptr(unsafe.Pointer(&textUTF16[0])),
+		uintptr(textLen),
+		uintptr(style),
+		uintptr(timeout / time.Second), // timeout 秒后自动关闭，0 表示不自动关闭
+		uintptr(unsafe.Pointer(&response)),
+		boolToUintptr(wait),
+	)
+	if r1 == 0 {
+		return 0, fmt.Errorf("向会话 %d 发送消息框: %v", sessionID, callErr)
+	}
+	return int(response), nil
+}
+
+// boolToUintptr 把 bool 转成 Win32 BOOL 形参的 0/1。
+func boolToUintptr(b bool) uintptr {
+	if b {
+		return 1
+	}
+	return 0
 }

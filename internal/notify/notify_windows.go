@@ -36,17 +36,34 @@ const hiddenNotifyCmd = "__notify"
 
 // Notify 发送桌面提醒（PRD 第 3 节）：优先 Toast；Toast 创建或显示失败时回退
 // MessageBoxW（阻塞至用户确认）。进程由 SCM 以服务身份启动时运行在 Session 0，
-// 任何窗口 UI 都不可见，改为在活动用户会话中启动通知辅助进程。错误沿接口
+// 任何窗口 UI 都对用户不可见：改为 relay 到活动用户会话启动通知辅助进程；
+// relay 失败时回退 WTSSendMessage 直接在用户会话桌面弹消息框（不等待关闭）。
+// Session 0 内的 Toast/MessageBox 用户不可见，不再作为回退。错误沿接口
 // 返回、由调用方（Manager）记录，本层不 panic、不打日志。
 func (n *windowsNotifier) Notify(title, message string, duration time.Duration) error {
 	// 会话检测失败时按普通进程处理，保持直接显示路径。
 	if inService, err := platform.IsWindowsService(); err == nil && inService {
-		return relayToUserSession(title, message, duration)
+		return notifyFromService(title, message, duration)
 	}
 	if err := sendToast(title, message, duration); err == nil {
 		return nil
 	}
 	return sendMessageBox(title, message)
+}
+
+// notifyFromService 是服务进程（Session 0）的通知路径：先 relay 到用户会话
+// 拉起辅助进程显示 Toast；relay 失败（无活动会话、缺特权等）时回退
+// WTSSendMessage 在用户会话桌面弹消息框（异步、不阻塞计时流程）。两者都
+// 失败时返回合并错误，交由调用方（Manager）记录。
+func notifyFromService(title, message string, duration time.Duration) error {
+	err := relayToUserSession(title, message, duration)
+	if err == nil {
+		return nil
+	}
+	if _, werr := platform.SendMessageToUserSession(title, message, platform.MBOk, duration, false); werr != nil {
+		return fmt.Errorf("relay 通知辅助进程: %w；WTS 回退亦失败: %v", err, werr)
+	}
+	return nil
 }
 
 // relayToUserSession 在活动控制台会话中以登录用户身份启动本二进制的通知辅助

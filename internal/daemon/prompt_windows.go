@@ -10,18 +10,17 @@ import (
 	"log/slog"
 	"syscall"
 	"unsafe"
+
+	"tempo/internal/platform"
 )
 
-// 自定义按钮 ID 与 Win32 标准对话框返回值（commctrl.h / winuser.h）。
+// TaskDialogIndirect 的自定义按钮 ID（commctrl.h）。MessageBox 的按钮样式与
+// 返回值（winuser.h）在 platform 包定义（MBOk/MBYesNoCancel/IDYes 等），
+// 由 WTS 路径与 MessageBoxW 兜底共用，不再重复声明。
 const (
 	taskDialogContinue = 1001 // 自定义按钮「继续」的 ID
 	taskDialogStop     = 1002 // 自定义按钮「停止」的 ID
 	taskDialogPause    = 1003 // 自定义按钮「暂停」的 ID
-
-	idCancel      = 2   // IDCANCEL：用户按 Esc 或关闭窗口
-	idYes         = 6   // IDYES：MessageBoxW 的「是」
-	idNo          = 7   // IDNO：MessageBoxW 的「否」
-	mbYesNoCancel = 0x3 // MB_YESNOCANCEL：是/否/取消三按钮
 )
 
 // TaskDialogIndirect 需要 comctl32 v6，与 user32 的 MessageBoxW 均按需加载；
@@ -68,8 +67,9 @@ type taskDialogConfig struct {
 	cxWidth                 uint32
 }
 
-// askConfirmPlatform 是 askConfirm 的 Windows 实现：TaskDialogIndirect 弹出
-// 三按钮对话框，阻塞至用户选择。
+// askConfirmPlatform 是 askConfirm 的 Windows 实现：常规以 TaskDialogIndirect
+// 弹出三按钮对话框、阻塞至用户选择；以服务运行（Session 0，任何窗口 UI 对
+// 用户不可见）时改走 serviceConfirm 的 WTSSendMessage 路径。
 //   - 1001/1002/1003（自定义按钮）→ 继续/停止/暂停；
 //   - IDCANCEL（用户按 Esc 或关闭窗口）→ 暂停，与 Linux 关闭弹窗的语义一致；
 //   - 调用失败（如未启用 comctl32 v6 视觉样式清单、会话 0 无交互桌面）→
@@ -80,6 +80,12 @@ type taskDialogConfig struct {
 // fallbackMessage 在 Windows 上未使用（MessageBoxW 兜底仍以 message 为正文），
 // 保留形参以匹配平台无关签名。
 func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage string) PromptResult {
+	// 服务模式（Session 0）下任何窗口 UI 都对用户不可见：改用 WTSSendMessage
+	// 在活动控制台会话桌面弹三按钮消息框，并同步等待用户选择。
+	if inService, err := platform.IsWindowsService(); err == nil && inService {
+		return serviceConfirm(logger, title, message)
+	}
+
 	titlePtr, err := syscall.UTF16PtrFromString(title)
 	if err != nil {
 		logger.Warn("TaskDialogIndirect failed, auto-continue", "error", err)
@@ -158,12 +164,37 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 		return PromptContinue
 	case taskDialogStop:
 		return PromptStop
-	case taskDialogPause, idCancel:
+	case taskDialogPause, platform.IDCancel:
 		// Esc 或关闭窗口返回 IDCANCEL，视为暂停。
 		return PromptPause
 	default:
 		// 异常返回值按调用失败处理，自动继续。
 		logger.Warn("TaskDialogIndirect failed, auto-continue", "button", chosen)
+		return PromptContinue
+	}
+}
+
+// serviceConfirm 是 askConfirm 在服务模式（Session 0）下的实现：Session 0 中
+// 弹不出任何可见窗口，改为经 WTSSendMessage 向活动控制台会话桌面发送三按钮
+// 消息框并同步等待选择：是 → 继续、否 → 停止、取消 → 暂停，超时自动关闭
+// （IDTIMEOUT）同样按暂停处理，让序列停留在待确认状态。调用失败 → 记录
+// WARN 后按继续处理，与 TaskDialogIndirect 的失败回退语义一致。至多阻塞
+// promptTimeout。
+func serviceConfirm(logger *slog.Logger, title, message string) PromptResult {
+	resp, err := platform.SendMessageToUserSession(title, message, platform.MBYesNoCancel, promptTimeout, true)
+	if err != nil {
+		logger.Warn("WTSSendMessage failed, auto-continue", "error", err)
+		return PromptContinue
+	}
+	switch resp {
+	case platform.IDYes:
+		return PromptContinue
+	case platform.IDNo:
+		return PromptStop
+	case platform.IDCancel, platform.IDTimeout:
+		return PromptPause
+	default:
+		logger.Warn("WTSSendMessage returned unexpected response, auto-continue", "response", resp)
 		return PromptContinue
 	}
 }
@@ -176,14 +207,14 @@ func messageBoxConfirm(logger *slog.Logger, titlePtr, textPtr *uint16) PromptRes
 		0,                                 // hWnd：无父窗口
 		uintptr(unsafe.Pointer(textPtr)),  // lpText：正文（message）
 		uintptr(unsafe.Pointer(titlePtr)), // lpCaption：标题（title）
-		mbYesNoCancel,
+		platform.MBYesNoCancel,
 	)
 	switch ret {
-	case idYes:
+	case platform.IDYes:
 		return PromptContinue
-	case idNo:
+	case platform.IDNo:
 		return PromptStop
-	case idCancel:
+	case platform.IDCancel:
 		return PromptPause
 	default:
 		// 0 = 调用失败：与 notify-send 回退一致，自动继续。
