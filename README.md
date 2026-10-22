@@ -64,6 +64,7 @@ journalctl --user -u tempo -f
 
 ```powershell
 tempo install-service
+net start tempo
 ```
 
 ## Quick start
@@ -104,15 +105,15 @@ tempo pomo stop [NAME]
 
 ### Options
 
-| Option                          | Description                                                                |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| `--name` / `-n`                 | Task name, used for later management; required                             |
-| `-t`                            | Duration in Go duration format, e.g. `25m`, `1h30m`                        |
-| `--rule` / `-r`                 | Reference a preset rule from the config file                               |
-| `--finish` / `-f`               | Custom command to run on completion; overrides the rule's `finish_command` |
-| `--work` / `-w`, `--short` / `-s`, `--long` / `-l` | Pomodoro phase durations                                |
-| `--cycle` / `-c`                | Number of work phases before a long break; default 4                       |
-| `--finish-on`                   | When the Pomodoro custom command runs: `each` (every phase) or `sequence` (whole sequence); default `each` |
+| Option                                             | Description                                                                                                |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `--name` / `-n`                                    | Task name, used for later management; required                                                             |
+| `-t`                                               | Duration in Go duration format, e.g. `25m`, `1h30m`                                                        |
+| `--rule` / `-r`                                    | Reference a preset rule from the config file                                                               |
+| `--finish` / `-f`                                  | Custom command to run on completion; overrides the rule's `finish_command`                                 |
+| `--work` / `-w`, `--short` / `-s`, `--long` / `-l` | Pomodoro phase durations                                                                                   |
+| `--cycle` / `-c`                                   | Number of work phases before a long break; default 4                                                       |
+| `--finish-on`                                      | When the Pomodoro custom command runs: `each` (every phase) or `sequence` (whole sequence); default `each` |
 
 ## Configuration
 
