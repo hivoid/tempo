@@ -88,6 +88,7 @@ tempo stop tea
 
 ```
 tempo daemon                                  前台运行 daemon（调试用）
+tempo version                                 打印版本号
 tempo install-service                         Linux 提示安装 systemd unit；Windows 安装 Service
 
 tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
@@ -211,6 +212,9 @@ tempo/
 go build ./...
 go test ./...
 go vet ./...
+
+# 构建带版本号的二进制（由 `tempo version` 报告）
+go build -ldflags "-X main.version=v1.0.0" -o tempo .
 
 # 交叉编译 Windows
 GOOS=windows GOARCH=amd64 go build ./...
