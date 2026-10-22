@@ -193,12 +193,25 @@ func dispatchPomodoroStatus(m *Manager, req protocol.Request) protocol.Response 
 	if name == "" {
 		return protocol.Response{OK: true}
 	}
-	info, err := m.PomodoroStatus(name)
+	state, err := m.PomodoroStatus(name)
 	if err != nil {
 		m.logger.Error("查询番茄钟状态失败", "task", name, "action", "pomodoro_status", "error", err)
 		return errResponse(err.Error())
 	}
-	return protocol.Response{OK: true, Pomodoro: info}
+	return protocol.Response{OK: true, Pomodoro: pomodoroInfo(state)}
+}
+
+// pomodoroInfo 将番茄钟领域状态转换为协议响应结构；剩余时长在此统一格式化为
+// 人类可读字符串（四舍五入到秒），领域层不感知协议表示。
+func pomodoroInfo(s *PomodoroState) *protocol.PomodoroInfo {
+	return &protocol.PomodoroInfo{
+		Name:      s.Name,
+		Phase:     s.Phase,
+		Completed: s.Completed,
+		Cycle:     s.Cycle,
+		Remaining: formatRemaining(s.Remaining),
+		Waiting:   s.Waiting,
+	}
 }
 
 // dispatchPomodoroStop 处理 pomodoro_stop 请求：Name 为空时解析唯一活动序列，

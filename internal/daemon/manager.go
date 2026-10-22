@@ -15,6 +15,12 @@ import (
 )
 
 // Manager 管理所有活动计时任务，所有方法并发安全。
+//
+// 锁顺序约定：嵌套加锁只允许 p.mu（PomodoroTracker）→ m.mu 方向（阶段任务经
+// registerTask 注册、阶段收尾经 unregisterTask 注销）；禁止在持有 m.mu 时获取
+// 任何 Task/PomodoroTracker 的锁，因此对二者的操作一律遵循「持 m.mu 查删注册表
+// → 解锁 → 再调用对象方法」的模式（见 Stop、PomodoroStop、PomodoroStatus、
+// PomodoroNext）。
 type Manager struct {
 	mu sync.Mutex
 
@@ -164,28 +170,36 @@ func (m *Manager) Resume(name string) error {
 // 当前阶段任务之外一并终止整个序列并将其从注册表移除（F19）。
 func (m *Manager) Stop(name string) error {
 	m.mu.Lock()
-	t, ok := m.tasks[name]
-	if ok {
+	t, hasTask := m.tasks[name]
+	if hasTask {
 		delete(m.tasks, name)
 	}
-	p, isPomo := m.pomodoros[name]
-	if isPomo {
-		delete(m.pomodoros, name)
-	}
+	p := m.detachPomodoroLocked(name)
 	m.mu.Unlock()
 
-	if !ok && !isPomo {
+	if !hasTask && p == nil {
 		return fmt.Errorf("任务 %s 不存在", name)
 	}
-	if ok {
+	if hasTask {
 		t.Stop()
 		m.logger.Info("任务已停止", "task", name, "trigger", "manual", "action", "stop")
 	}
-	if isPomo {
+	if p != nil {
 		// tracker.Stop 内部完成序列停止日志与 sequence 模式的 finish_command。
 		p.Stop()
 	}
 	return nil
+}
+
+// detachPomodoroLocked 从注册表摘除指定番茄钟序列并返回，供 Stop 与 PomodoroStop
+// 复用查删逻辑；须持有 m.mu，序列不存在时返回 nil。摘除后对 tracker 的调用在
+// 解锁后进行（锁顺序约定见 Manager 文档）。
+func (m *Manager) detachPomodoroLocked(name string) *PomodoroTracker {
+	p, ok := m.pomodoros[name]
+	if ok {
+		delete(m.pomodoros, name)
+	}
+	return p
 }
 
 // lookup 返回指定名称的任务。
@@ -194,6 +208,23 @@ func (m *Manager) lookup(name string) (*Task, bool) {
 	t, ok := m.tasks[name]
 	m.mu.Unlock()
 	return t, ok
+}
+
+// registerTask 将任务注册进任务表（覆盖同名条目）。供 PomodoroTracker 注册阶段
+// 任务：tracker 持自身锁后调用，构成允许的 p.mu→m.mu 锁序，并保持与 Manager.Start
+// 相同的「持锁注册」语义，防御极短时长下回调先于注册执行。
+func (m *Manager) registerTask(t *Task) {
+	m.mu.Lock()
+	m.tasks[t.name] = t
+	m.mu.Unlock()
+}
+
+// unregisterTask 从任务表移除指定名称的任务。供 PomodoroTracker 在阶段结束、
+// 序列停止时清理同名阶段任务，替代跨对象直改 m.tasks。
+func (m *Manager) unregisterTask(name string) {
+	m.mu.Lock()
+	delete(m.tasks, name)
+	m.mu.Unlock()
 }
 
 // PomodoroOptions 描述番茄钟序列参数。零值字段与 FinishOn 的缺省值由
@@ -244,36 +275,30 @@ func (m *Manager) PomodoroStart(name string, opts PomodoroOptions) error {
 }
 
 // PomodoroStatus 返回指定番茄钟的当前阶段与周期进度（PRD F18）。
-func (m *Manager) PomodoroStatus(name string) (*protocol.PomodoroInfo, error) {
+// 返回领域状态 PomodoroState，协议结构 protocol.PomodoroInfo 的转换由 IPC 层
+// （server.go）完成，避免领域层依赖传输协议。
+func (m *Manager) PomodoroStatus(name string) (*PomodoroState, error) {
 	m.mu.Lock()
 	p, ok := m.pomodoros[name]
 	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("番茄钟 %s 不存在", name)
 	}
-	info := p.Status()
-	return &info, nil
+	state := p.Status()
+	return &state, nil
 }
 
-// PomodoroStop 终止整个番茄钟序列并停止当前阶段任务（PRD F19）。
-// 序列停止日志与 sequence 模式的 finish_command 由 PomodoroTracker.Stop 处理。
+// PomodoroStop 终止整个番茄钟序列并停止当前阶段任务（PRD F19），是序列停止的
+// 唯一入口：IPC 层的 pomodoro_stop 与 tracker 确认弹窗的停止路径（requestStop）
+// 共用，不再单设 StopPomodoroInternal。短暂持 m.mu 查删 m.pomodoros 条目，
+// 解锁后调用 tracker.Stop()（其内部再经 unregisterTask 短暂持 m.mu 删除阶段
+// 任务）；不得在持有 tracker 锁（p.mu）时调用，否则会与 Stop 内部的加锁顺序
+// 互锁。序列停止日志与 sequence 模式的 finish_command 由 PomodoroTracker.Stop 处理。
 func (m *Manager) PomodoroStop(name string) error {
-	return m.StopPomodoroInternal(name)
-}
-
-// StopPomodoroInternal 从注册表移除指定番茄钟序列并终止它，供 IPC 层的
-// PomodoroStop 与 tracker 确认弹窗的停止路径（requestStop）共用：短暂持 m.mu
-// 查找并删除 m.pomodoros 条目，解锁后调用 tracker.Stop()（其内部再短暂持
-// m.mu 从 m.tasks 删除阶段任务）。不得在持有 tracker 锁（p.mu）时调用，
-// 否则会与 Stop 内部的加锁顺序互锁。
-func (m *Manager) StopPomodoroInternal(name string) error {
 	m.mu.Lock()
-	p, ok := m.pomodoros[name]
-	if ok {
-		delete(m.pomodoros, name)
-	}
+	p := m.detachPomodoroLocked(name)
 	m.mu.Unlock()
-	if !ok {
+	if p == nil {
 		return fmt.Errorf("番茄钟 %s 不存在", name)
 	}
 	p.Stop()

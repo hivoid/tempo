@@ -2,12 +2,10 @@ package daemon
 
 import (
 	"fmt"
-	"os/exec"
 	"sync"
 	"time"
 
 	"tempo/internal/config"
-	"tempo/internal/protocol"
 )
 
 // 番茄钟阶段名称，取值与 protocol.PomodoroInfo.Phase 的约定一致。
@@ -85,8 +83,9 @@ func (p *PomodoroTracker) startStage(phase string, d time.Duration) {
 }
 
 // startStageLocked 是 startStage 的持锁版本，供 Advance 等已持有 p.mu 的调用方复用。
-// 全程持 p.mu 并在 mgr.mu 内注册：既与 Stop 互斥（防止停止后注册出僵尸任务），
-// 也与 Manager.Start 相同地防御极短时长下回调先于注册执行。
+// 全程持 p.mu 并经 Manager.registerTask 注册（允许的 p.mu→m.mu 锁序）：既与
+// Stop 互斥（防止停止后注册出僵尸任务），也与 Manager.Start 相同地防御极短
+// 时长下回调先于注册执行。
 func (p *PomodoroTracker) startStageLocked(phase string, d time.Duration) {
 	if p.stopped {
 		return
@@ -94,19 +93,16 @@ func (p *PomodoroTracker) startStageLocked(phase string, d time.Duration) {
 	p.phase = phase
 
 	t := newTask(p.name, p.opts.Rule, "", d, p.onStageComplete)
-	p.mgr.mu.Lock()
-	p.mgr.tasks[p.name] = t
-	p.mgr.mu.Unlock()
+	p.mgr.registerTask(t)
 
 	p.current = t
 }
 
-// removeCurrentTask 将已结束的阶段任务从 Manager.tasks 删除。阶段结束的用户提醒
-// 由确认弹窗（askConfirm）承担，不再走 Manager.onTaskFinish 的默认通知路径。
+// removeCurrentTask 经 Manager.unregisterTask 将当前阶段同名任务从注册表删除。
+// 阶段结束的用户提醒由确认弹窗（askConfirm）承担，不再走 Manager.onTaskFinish
+// 的默认通知路径。可在持有 p.mu 时调用（构成允许的 p.mu→m.mu 锁序）。
 func (p *PomodoroTracker) removeCurrentTask() {
-	p.mgr.mu.Lock()
-	delete(p.mgr.tasks, p.name)
-	p.mgr.mu.Unlock()
+	p.mgr.unregisterTask(p.name)
 }
 
 // onStageComplete 是阶段任务正常结束的回调：从 Manager.tasks 移除已完成的阶段
@@ -142,13 +138,13 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 	p.current = nil
 	// 持锁读取注入点，与测试恢复 askConfirmFn 之间经 p.mu 形成 happens-before。
 	confirm := askConfirmFn
-	p.mu.Unlock()
-
-	// 旧阶段任务收尾：先 Stop 兜底确保计时器不可能再次触发（fire 已触发过
-	// onFinish，由此保证每个 Task 的 onFinish 至多执行一次），再从 Manager.tasks
-	// 删除；下一阶段任务在确认后由 Advance 创建。
+	// 旧阶段任务收尾须在本临界区内完成（锁序 p.mu→t.mu、p.mu→m.mu 均为允许
+	// 方向）：先 Stop 兜底确保计时器不可能再次触发（fire 已触发过 onFinish，
+	// 由此保证每个 Task 的 onFinish 至多执行一次），再从注册表删除。若推迟到
+	// 解锁之后，并发的 Advance 可能已在间隙注册同名新阶段任务而被此处按名误删。
 	t.Stop()
 	p.removeCurrentTask()
+	p.mu.Unlock()
 
 	p.mgr.logger.Info("番茄钟阶段结束",
 		"task", p.name,
@@ -207,12 +203,12 @@ func (p *PomodoroTracker) setWaiting() {
 		"action", "pomodoro_waiting")
 }
 
-// requestStop 处理确认弹窗的停止选择：经 Manager 的 StopPomodoroInternal 从
-// 注册表移除并终止整个序列。须在未持有 p.mu 的上下文调用（确认 goroutine
-// 满足）；StopPomodoroInternal 按短暂持 m.mu 查删注册表、解锁后再调用
-// tracker.Stop 的顺序加锁，与 Manager.Stop 相同，不会形成锁序死锁。
+// requestStop 处理确认弹窗的停止选择：经 Manager 的 PomodoroStop 从注册表
+// 移除并终止整个序列。须在未持有 p.mu 的上下文调用（确认 goroutine 满足）；
+// PomodoroStop 按短暂持 m.mu 查删注册表、解锁后再调用 tracker.Stop 的顺序
+// 加锁，与 Manager.Stop 相同，不会形成锁序死锁。
 func (p *PomodoroTracker) requestStop() {
-	if err := p.mgr.StopPomodoroInternal(p.name); err != nil {
+	if err := p.mgr.PomodoroStop(p.name); err != nil {
 		p.mgr.logger.Error("停止番茄钟序列失败",
 			"task", p.name,
 			"rule", p.opts.Rule,
@@ -222,14 +218,15 @@ func (p *PomodoroTracker) requestStop() {
 }
 
 // nextStageLocked 按 4.5 节状态机返回当前阶段结束后的下一阶段：专注完成后，
-// 当前 cycle 内已完成专注数对 Cycle 取模为 0（即达到 Cycle）时进入长休，否则
-// 进入短休；休息完成后进入下一个专注。调用方须持有 p.mu，且 completed 已按
-// 本阶段结果更新（0..Cycle，该不变式下取模判断与 == Cycle 等价）。
+// 当前 cycle 内已完成专注数达到 Cycle 时进入长休，否则进入短休；休息完成后
+// 进入下一个专注。调用方须持有 p.mu，且 completed 已按本阶段结果更新
+// （0..Cycle）。用 >= 而非取模判断：消除 Cycle 异常为 0 时的除零风险，
+// completed 越过不变式上界时也能正确落到长休。
 func (p *PomodoroTracker) nextStageLocked(from string) string {
 	if from != phaseWork {
 		return phaseWork
 	}
-	if p.completed%p.opts.Cycle == 0 {
+	if p.completed >= p.opts.Cycle {
 		return phaseLongBreak
 	}
 	return phaseShortBreak
@@ -325,20 +322,28 @@ func (p *PomodoroTracker) advanceLocked() error {
 	return nil
 }
 
-// Status 返回当前阶段与周期进度（F18）：name 为序列名称（同时是当前阶段任务
-// 名，与 tempo list 中的任务名一致），phase 为当前阶段名，completed 为当前
-// cycle 内已完成的专注数（0..Cycle，长休结束后归零），cycle 为一个长休周期包含
-// 的专注数，remaining 为当前阶段任务剩余时长；waiting 表示阶段结束被暂停，
-// 需 tempo pomo next 推进。
-func (p *PomodoroTracker) Status() protocol.PomodoroInfo {
+// PomodoroState 是番茄钟序列的领域状态快照（F18），与 IPC 协议结构
+// protocol.PomodoroInfo 解耦：Remaining 保留原始时长，人类可读格式化由 IPC 层
+// （server.go）集中完成。
+type PomodoroState struct {
+	Name      string        // 序列名称，同时是当前阶段任务名（与 tempo list 中任务名一致）
+	Phase     string        // 当前阶段：phaseWork | phaseShortBreak | phaseLongBreak
+	Completed int           // 当前 cycle 内已完成的专注数，0..Cycle，长休结束后归零
+	Cycle     int           // 一个长休周期包含的专注数
+	Remaining time.Duration // 当前阶段任务剩余时长，无活动任务时为 0
+	Waiting   bool          // 阶段结束待确认，等待 tempo pomo next 推进
+}
+
+// Status 返回当前阶段与周期进度的领域状态（F18），字段语义见 PomodoroState。
+func (p *PomodoroTracker) Status() PomodoroState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	remaining := "0s"
+	var remaining time.Duration
 	if p.current != nil {
-		remaining = formatRemaining(p.current.Remaining())
+		remaining = p.current.Remaining()
 	}
-	return protocol.PomodoroInfo{
+	return PomodoroState{
 		Name:      p.name,
 		Phase:     p.phase,
 		Completed: p.completed,
@@ -367,9 +372,7 @@ func (p *PomodoroTracker) Stop() {
 	p.mu.Unlock()
 
 	// 移除当前阶段任务，避免序列终止后残留于任务列表。
-	p.mgr.mu.Lock()
-	delete(p.mgr.tasks, p.name)
-	p.mgr.mu.Unlock()
+	p.removeCurrentTask()
 
 	if current != nil {
 		current.Stop()
@@ -390,13 +393,13 @@ func (p *PomodoroTracker) Stop() {
 
 // runFinishCommand 执行规则配置的自定义结束命令（F10）：执行失败仅记日志，
 // 不 panic、不阻塞（F12）；无规则或未配置 finish_command 时空操作。
-// 命令经 sh -c 执行（CONTEXT.md §5.4 Linux 约定），Windows cmd /c 待平台层接入后统一处理。
+// shell 选择由平台文件决定：Linux sh -c（CONTEXT.md §5.4）/ Windows cmd /c。
 func (p *PomodoroTracker) runFinishCommand(phase string) {
 	cmdText := p.finishCommand()
 	if cmdText == "" {
 		return
 	}
-	if _, err := exec.Command("sh", "-c", cmdText).CombinedOutput(); err != nil {
+	if _, err := runFinishShellCommand(cmdText); err != nil {
 		p.mgr.logger.Error("执行自定义结束命令失败",
 			"task", p.name,
 			"rule", p.opts.Rule,
