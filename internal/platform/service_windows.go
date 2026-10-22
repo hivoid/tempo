@@ -39,7 +39,7 @@ func (s *serviceRunner) Execute(args []string, req <-chan svc.ChangeRequest, sta
 	status <- svc.Status{State: svc.StartPending}
 
 	done := make(chan error, 1)
-	go func() { done <- s.run() }()
+	go func() { done <- s.run(s.stop) }()
 
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 
