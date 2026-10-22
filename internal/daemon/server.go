@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"tempo/internal/protocol"
@@ -17,6 +18,16 @@ import (
 // 循环 Accept，每条连接在独立 goroutine 中处理一个请求并回写响应。
 // Accept 失败（如监听器被关闭）时返回错误并清理 socket。
 func Serve(m *Manager) error {
+	return ServeWithShutdown(m, nil)
+}
+
+// ServeWithShutdown 与 Serve 相同，但 stop 关闭后停止接受新连接并返回 nil，
+// 供 Windows 服务模式在收到 SCM 停止请求时中断 Accept 循环（Linux 由 systemd
+// 直接终止进程，无需该机制）；stop 为 nil 时行为与 Serve 一致。
+// 关闭监听器会使阻塞中的 Accept 返回错误，据 shuttingDown 标志区分主动关闭
+// 与真实故障；已在处理的请求随返回断开，CLI 侧有 2 秒超时兜底。
+// 依赖 Listener 的 Close 与 Accept 可并发调用（net.Listener 标准语义）。
+func ServeWithShutdown(m *Manager, stop <-chan struct{}) error {
 	if m == nil {
 		return errors.New("daemon: manager 不能为空")
 	}
@@ -28,14 +39,29 @@ func Serve(m *Manager) error {
 	if err := srv.Listen(); err != nil {
 		return fmt.Errorf("daemon: 监听 IPC: %w", err)
 	}
-	// 返回前关闭监听器，错误无法补救，显式忽略以满足 errcheck。
-	defer func() { _ = srv.Close() }()
+
+	// 收到停止信号后置位标志并关闭监听器解除 Accept 阻塞；两条退出路径
+	// （主动关闭/真实故障）互斥，监听器至多被关闭一次。
+	var shuttingDown atomic.Bool
+	if stop != nil {
+		go func() {
+			<-stop
+			shuttingDown.Store(true)
+			_ = srv.Close()
+		}()
+	}
 
 	m.logger.Info("IPC 监听已启动", "action", "serve")
 
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
+			if shuttingDown.Load() {
+				m.logger.Info("IPC 服务已停止", "action", "serve_stop")
+				return nil
+			}
+			// 真实故障：清理 socket 后返回错误。
+			_ = srv.Close()
 			return fmt.Errorf("daemon: accept: %w", err)
 		}
 		go handleConn(m, conn)

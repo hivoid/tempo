@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"gopkg.in/natefinch/npipe.v2"
 
 	"tempo/internal/protocol"
@@ -18,10 +21,20 @@ import (
 // pipeName 是 daemon IPC 命名管道的完整地址。
 const pipeName = `\\.\pipe\tempo-daemon`
 
+// pipeSDDL 是命名管道的安全描述符（SDDL）：DACL 带保护标志，授予 SYSTEM（SY）、
+// Administrators（BA）与 Authenticated Users（AU）完全访问权限。命名管道默认
+// 取创建进程令牌的默认 DACL——服务以 LocalSystem 运行时普通用户不在其中，
+// 其 CLI 将无法连接写入，因此显式放宽到本机已登录用户。
+const pipeSDDL = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)"
+
 // pipeServer 基于 Windows 命名管道的 Server 实现。
 type pipeServer struct {
 	listener *npipe.PipeListener
 	path     string
+
+	// sd 是 Listen 解析出的安全描述符：npipe 每次创建新管道实例都会经
+	// SecurityAttributes 读取它，须随 listener 存活，防止被 GC 回收。
+	sd *windows.SECURITY_DESCRIPTOR
 }
 
 // NewServer 创建 Windows 平台的 IPC Server。
@@ -40,10 +53,19 @@ func (s *pipeServer) Listen() error {
 	if s.listener != nil {
 		return fmt.Errorf("transport: 已在监听 %s", s.path)
 	}
-	l, err := npipe.Listen(s.path)
+	sd, err := windows.SecurityDescriptorFromString(pipeSDDL)
+	if err != nil {
+		return fmt.Errorf("transport: 解析管道安全描述符: %w", err)
+	}
+	sa := &syscall.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(syscall.SecurityAttributes{})),
+		SecurityDescriptor: uintptr(unsafe.Pointer(sd)),
+	}
+	l, err := npipe.ListenPipe(s.path, sa)
 	if err != nil {
 		return fmt.Errorf("transport: 监听 %s: %w", s.path, err)
 	}
+	s.sd = sd
 	s.listener = l
 	return nil
 }
