@@ -3,23 +3,36 @@
 package notify
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
+	"unicode/utf16"
 
 	"tempo/internal/platform"
-
-	"github.com/go-toast/toast"
 )
-
-// appName 是 Toast 通知使用的 AppUserModelID。
-const appName = "tempo"
 
 // toastLongThreshold 是 Toast 显示时长的映射阈值：建议显示时长超过它用 long，否则用 short。
 const toastLongThreshold = 5 * time.Second
+
+// powershellAUMID 是 Windows PowerShell 自带的已注册 AppUserModelID（开始菜单中
+// 系统自带 powershell.exe 的快捷方式）。未打包应用发送 Toast 要求其 AUMID 已在
+// 开始菜单注册，否则 ToastNotificationManager 的 Show() 会静默丢弃通知且不返回
+// 任何错误——此前以自定义 AppID "tempo" 经 go-toast 发送时正是该症状：Push 返回
+// nil 但通知从不渲染，上层 MessageBox 回退因此永不触发。改用系统注册的 AUMID
+// 可保证 Toast 真正显示，代价是通知来源显示为 "Windows PowerShell"。
+const powershellAUMID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
+
+// toastTimeout 限制单次 Toast 的发送时长（PowerShell 冷启动通常 1~3 秒），
+// 防止 PowerShell 异常时无限阻塞计时结束回调；超时按失败处理并触发 MessageBox 回退。
+const toastTimeout = 15 * time.Second
 
 // windowsNotifier 优先发送 Toast 通知，失败时回退 MessageBoxW。
 type windowsNotifier struct{}
@@ -82,21 +95,52 @@ func relayToUserSession(title, message string, duration time.Duration) error {
 	)
 }
 
-// sendToast 通过 go-toast/toast 发送 Toast 通知：建议显示时长超过
-// toastLongThreshold 时映射为 long，否则为 short。
+// toastScriptTemplate 是发送 Toast 的 PowerShell 脚本模板，经 -EncodedCommand
+// 传入（UTF-16LE 的 base64，规避命令行引号转义且不受 ExecutionPolicy 限制）。
+// 标题与正文在脚本内先 base64 解码、再经 SecurityElement.Escape 做 XML 转义，
+// 避免内容破坏通知 XML；模板中的 "" 为 PowerShell 双引号字符串内的转义双引号。
+const toastScriptTemplate = `
+$ErrorActionPreference = 'Stop'
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$appId = '%s'
+$title = [System.Security.SecurityElement]::Escape([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('%s')))
+$message = [System.Security.SecurityElement]::Escape([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('%s')))
+$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+$xml.LoadXml("<toast duration=""%s""><visual><binding template=""ToastGeneric""><text>$title</text><text>$message</text></binding></visual></toast>")
+$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+`
+
+// sendToast 直接经 Windows PowerShell 5.1 调用 WinRT 发送 Toast 通知：建议显示
+// 时长超过 toastLongThreshold 时映射为 long，否则为 short。不经 go-toast：其对
+// 未打包应用的 AUMID 注册不可靠，会产生「成功却不显示」的静默失败（见
+// powershellAUMID 注释）。错误沿接口返回，由调用方触发 MessageBox 回退。
 func sendToast(title, message string, duration time.Duration) error {
-	d := toast.Short
+	d := "short"
 	if duration > toastLongThreshold {
-		d = toast.Long
+		d = "long"
 	}
-	notification := toast.Notification{
-		AppID:    appName,
-		Title:    title,
-		Message:  message,
-		Duration: d,
+	script := fmt.Sprintf(toastScriptTemplate,
+		powershellAUMID,
+		base64.StdEncoding.EncodeToString([]byte(title)),
+		base64.StdEncoding.EncodeToString([]byte(message)),
+		d,
+	)
+
+	// -EncodedCommand 要求整个脚本先编码为 UTF-16LE 再做 base64。
+	u16 := utf16.Encode([]rune(script))
+	raw := make([]byte, 2*len(u16))
+	for i, r := range u16 {
+		binary.LittleEndian.PutUint16(raw[2*i:], r)
 	}
-	if err := notification.Push(); err != nil {
-		return fmt.Errorf("toast: %w", err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), toastTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe",
+		"-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(raw))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("toast: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
