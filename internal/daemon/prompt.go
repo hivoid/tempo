@@ -1,8 +1,8 @@
 package daemon
 
-// 三选确认弹窗（继续/停止/暂停）：本文件提供平台无关入口、三态结果类型与
-// 两平台共享的等待超时常量，平台实现按 build tag 隔离并各自提供同名
-// askConfirmPlatform：
+// 确认/提醒弹窗：本文件提供平台无关入口（三选确认 askConfirm、单按钮结束
+// 提醒 notifyDone）、三态结果类型与两平台共享的等待超时常量，平台实现按
+// build tag 隔离并各自提供同名 askConfirmPlatform / notifyDonePlatform：
 //   - Linux（prompt_linux.go）：kdialog → zenity → notify-send 依次探测回退；
 //   - Windows（prompt_windows.go）：TaskDialogIndirect 三按钮对话框，
 //     加载失败时回退 MessageBoxW，仍不可用则自动继续。
@@ -54,4 +54,17 @@ var askConfirmFn = askConfirm
 // （prompt_linux.go / prompt_windows.go 按 build tag 二选一参与编译）。
 func askConfirm(logger *slog.Logger, title, message, fallbackMessage string) PromptResult {
 	return askConfirmPlatform(logger, title, message, fallbackMessage)
+}
+
+// notifyDoneFn 是 notifyDone 的注入点：生产代码固定为 notifyDone，
+// 测试替换为桩函数以避免真实弹窗阻塞。
+var notifyDoneFn = notifyDone
+
+// notifyDone 弹出单按钮结束提醒框（仅一个「知道了」按钮）：与番茄钟阶段结束
+// 确认使用相同的平台组件与回退链，但按钮只有一个，阻塞至用户确认或超时
+// （promptTimeout）。返回是否已成功向用户展示提醒；无法展示时返回 false，
+// 由调用方决定纯通知兜底。具体弹窗方式委托给当前平台的 notifyDonePlatform
+// （prompt_linux.go / prompt_windows.go 按 build tag 二选一参与编译）。
+func notifyDone(logger *slog.Logger, title, message string) bool {
+	return notifyDonePlatform(logger, title, message)
 }

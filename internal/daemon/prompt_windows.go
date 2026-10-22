@@ -2,9 +2,10 @@
 
 package daemon
 
-// Windows 的三选确认实现：经 comctl32 的 TaskDialogIndirect 弹出
-// 「继续/停止/暂停」三按钮模态对话框，加载失败时回退 user32 的 MessageBoxW。
-// 全部经 syscall 调用，无 CGO、无第三方依赖。
+// Windows 的确认/提醒实现：经 comctl32 的 TaskDialogIndirect 弹出
+// 「继续/停止/暂停」三按钮模态对话框（askConfirmPlatform），以及仅含
+// 「知道了」单按钮的结束提醒框（notifyDonePlatform），加载失败时均回退
+// user32 的 MessageBoxW。全部经 syscall 调用，无 CGO、无第三方依赖。
 
 import (
 	"log/slog"
@@ -21,6 +22,7 @@ const (
 	taskDialogContinue = 1001 // 自定义按钮「继续」的 ID
 	taskDialogStop     = 1002 // 自定义按钮「停止」的 ID
 	taskDialogPause    = 1003 // 自定义按钮「暂停」的 ID
+	taskDialogOK       = 1004 // 单按钮提醒「知道了」的 ID
 )
 
 // TaskDialogIndirect 需要 comctl32 v6，与 user32 的 MessageBoxW 均按需加载；
@@ -222,4 +224,88 @@ func messageBoxConfirm(logger *slog.Logger, titlePtr, textPtr *uint16) PromptRes
 		logger.Warn("MessageBoxW failed, auto-continue", "ret", ret)
 		return PromptContinue
 	}
+}
+
+// notifyDonePlatform 是 notifyDone 的 Windows 实现：常规以 TaskDialogIndirect
+// 弹出仅含「知道了」按钮的模态对话框、阻塞至用户确认；以服务运行（Session 0，
+// 任何窗口 UI 对用户不可见）时改走 serviceConfirm 同款的 WTSSendMessage 路径，
+// 按钮样式为 MB_OK；TaskDialogIndirect 加载失败（极罕见）时回退 MessageBoxW
+// 的 MB_OK。任一路径成功展示并等待到确认返回 true；失败（如编码失败、会话
+// 不可达）返回 false，交由调用方以纯通知兜底。
+func notifyDonePlatform(logger *slog.Logger, title, message string) bool {
+	// 服务模式（Session 0）下任何窗口 UI 都对用户不可见：改用 WTSSendMessage
+	// 在活动控制台会话桌面弹单按钮消息框并同步等待确认，至多阻塞 promptTimeout。
+	if inService, err := platform.IsWindowsService(); err == nil && inService {
+		if _, err := platform.SendMessageToUserSession(title, message, platform.MBOk, promptTimeout, true); err != nil {
+			logger.Warn("WTSSendMessage failed, notify failed", "error", err)
+			return false
+		}
+		logger.Info("结束提醒已确认", "tool", "WTSSendMessage")
+		return true
+	}
+
+	titlePtr, err := syscall.UTF16PtrFromString(title)
+	if err != nil {
+		logger.Warn("notifyDone failed", "error", err)
+		return false
+	}
+	contentPtr, err := syscall.UTF16PtrFromString(message)
+	if err != nil {
+		logger.Warn("notifyDone failed", "error", err)
+		return false
+	}
+
+	// TaskDialogIndirect 加载失败（极罕见）时回退 MessageBoxW（MB_OK）。
+	if procTaskDialogIndirect.Find() != nil {
+		logger.Warn("TaskDialogIndirect unavailable, falling back to MessageBoxW")
+		if messageBoxOk(titlePtr, contentPtr) {
+			logger.Info("结束提醒已确认", "tool", "MessageBoxW")
+			return true
+		}
+		logger.Warn("MessageBoxW failed, notify failed")
+		return false
+	}
+
+	okText, err := syscall.UTF16PtrFromString("知道了")
+	if err != nil {
+		logger.Warn("TaskDialogIndirect failed", "error", err)
+		return false
+	}
+	buttons := []taskDialogButton{{nButtonID: taskDialogOK, pszButtonText: okText}}
+	cfg := taskDialogConfig{
+		cbSize:         uint32(unsafe.Sizeof(taskDialogConfig{})),
+		hwndParent:     0, // 无父窗口
+		pszWindowTitle: titlePtr,
+		pszContent:     contentPtr,
+		cButtons:       uint32(len(buttons)),
+		pButtons:       &buttons[0],
+		nDefaultButton: taskDialogOK, // 「知道了」为默认按钮
+	}
+
+	var chosen int32
+	hr, _, _ := procTaskDialogIndirect.Call(
+		uintptr(unsafe.Pointer(&cfg)),
+		uintptr(unsafe.Pointer(&chosen)),
+		0, // pnRadioButton：未使用
+		0, // pfVerificationFlagChecked：未使用
+	)
+	if hr != 0 {
+		logger.Warn("TaskDialogIndirect failed, notify failed", "hresult", hr)
+		return false
+	}
+	logger.Info("结束提醒已确认", "tool", "TaskDialogIndirect", "button", chosen)
+	return true
+}
+
+// messageBoxOk 以 user32 的 MessageBoxW（MB_OK）弹单按钮提醒、阻塞至用户
+// 确认，作为 TaskDialogIndirect 不可用时的兜底；调用失败返回 false。
+func messageBoxOk(titlePtr, textPtr *uint16) bool {
+	// Call 的可变参数为 uintptr：MBOk 是 uint32 类型常量，须显式转换。
+	ret, _, _ := procMessageBoxW.Call(
+		0,                                 // hWnd：无父窗口
+		uintptr(unsafe.Pointer(textPtr)),  // lpText：正文（message）
+		uintptr(unsafe.Pointer(titlePtr)), // lpCaption：标题（title）
+		uintptr(platform.MBOk),
+	)
+	return ret != 0
 }

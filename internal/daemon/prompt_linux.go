@@ -83,6 +83,56 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 	return PromptContinue
 }
 
+// notifyDonePlatform 是 notifyDone 的 Linux 实现：按 kdialog --msgbox →
+// zenity --info → notify-send 的顺序探测并回退，与 askConfirmPlatform 使用
+// 相同的工具链，但均为单按钮（确定）提醒、无需区分用户选择：
+//   - kdialog --msgbox 可用且退出码 0 → 已展示；
+//   - zenity --info 可用且退出码 0 → 已展示；
+//   - notify-send 可用时仅发送通知、无法阻塞等待确认，发出后视为已展示；
+//   - 三者均不可用或全部失败 → 记录日志并返回 false，交由调用方兜底。
+//
+// 某个工具执行失败（如无法连接显示服务）时记录日志并继续尝试下一个工具。
+func notifyDonePlatform(logger *slog.Logger, title, message string) bool {
+	if _, err := exec.LookPath("kdialog"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
+		defer cancel()
+		err := exec.CommandContext(ctx, "kdialog", "--title", title,
+			"--msgbox", message).Run()
+		if err == nil {
+			logger.Info("结束提醒已确认", "tool", "kdialog")
+			return true
+		}
+		logger.Error("kdialog 结束提醒失败，尝试 zenity", "error", err)
+	}
+	if _, err := exec.LookPath("zenity"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
+		defer cancel()
+		err := exec.CommandContext(ctx, "zenity", "--info",
+			"--title", title, "--text", message).Run()
+		if err == nil {
+			logger.Info("结束提醒已确认", "tool", "zenity")
+			return true
+		}
+		logger.Error("zenity 结束提醒失败，尝试 notify-send", "error", err)
+	}
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		// 仅通知、无法阻塞确认：正文用 message，通知送达即视为已提醒。
+		logger.Info("no interactive prompt available, sending notification")
+		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "notify-send",
+			"-i", "clock", "-a", "tempo", "-t", "60000",
+			title, message).Run(); err != nil {
+			logger.Error("notify-send 提示失败", "error", err)
+			return false
+		}
+		logger.Info("结束提醒已发送", "tool", "notify-send")
+		return true
+	}
+	logger.Warn("no prompt tool available, notify failed")
+	return false
+}
+
 // exitCode 返回命令的退出码：err 为 nil 时为 0；非 ExitError（被超时杀死、
 // 启动失败等）返回 -1，供调用方按「其他错误」继续回退。
 func exitCode(err error) int {

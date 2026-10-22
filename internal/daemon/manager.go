@@ -32,7 +32,7 @@ type Manager struct {
 }
 
 // NewManager 创建任务管理器。cfg、notifier、logger 由调用方注入：
-// cfg 为 nil 时按空配置处理；notifier 为 nil 时不发送通知；
+// cfg 为 nil 时按空配置处理；notifier 为 nil 时任务结束提醒无纯通知兜底；
 // logger 为 nil 时日志写入被丢弃（仅供测试兜底，生产环境应注入有效 logger）。
 func NewManager(cfg *config.Config, notifier notify.Notifier, logger *slog.Logger) *Manager {
 	if cfg == nil {
@@ -100,9 +100,11 @@ func (m *Manager) Start(name, rule, duration, finishCmd string) error {
 	return nil
 }
 
-// onTaskFinish 是任务计时到点的结束回调：从注册表移除任务、发送平台默认提醒并记日志。
-// 由 Task.fire 在锁外调用。自定义结束命令的执行（PRD F9/F11/F12，
-// Linux sh -c / Windows cmd /c）待平台适配层完成后在此接入。
+// onTaskFinish 是任务计时到点的结束回调：从注册表移除任务并执行结束提醒，
+// 由 Task.fire 在锁外调用。提醒优先级（PRD F11）：配置了自定义结束命令时仅
+// 执行该命令（Linux sh -c / Windows cmd /c，与番茄钟共用 runFinishShellCommand）；
+// 否则弹出与番茄钟阶段结束一致的交互提醒组件，按钮仅一个「知道了」；
+// 无可用交互组件时回退 notifier 纯通知。
 func (m *Manager) onTaskFinish(t *Task) {
 	m.mu.Lock()
 	delete(m.tasks, t.name)
@@ -110,14 +112,33 @@ func (m *Manager) onTaskFinish(t *Task) {
 
 	m.logger.Info("任务计时结束", "task", t.name, "rule", t.rule, "trigger", "timer", "action", "finish")
 
+	if t.finishCmd != "" {
+		if _, err := runFinishShellCommand(t.finishCmd); err != nil {
+			m.logger.Error("执行自定义结束命令失败", "task", t.name, "error", err)
+		}
+		return
+	}
+	m.alertTaskDone(t.name)
+}
+
+// alertTaskDone 弹出任务结束的默认提醒（PRD F11 平台默认提醒）：使用与番茄
+// 钟阶段结束一致的交互组件、按钮仅一个「知道了」，阻塞至用户确认或超时；
+// 无可用交互组件时回退 notifier 纯通知，二者皆不可用时仅记日志。
+func (m *Manager) alertTaskDone(name string) {
+	message := fmt.Sprintf("任务 %s 计时结束", name)
+	if notifyDoneFn(m.logger, "tempo", message) {
+		m.logger.Info("结束提醒已确认", "task", name)
+		return
+	}
 	if m.notifier == nil {
+		m.logger.Warn("无可用提醒方式", "task", name)
 		return
 	}
-	if err := m.notifier.Notify("tempo", fmt.Sprintf("任务 %s 计时结束", t.name), 10*time.Second); err != nil {
-		m.logger.Error("发送通知失败", "task", t.name, "error", err)
+	if err := m.notifier.Notify("tempo", message, 10*time.Second); err != nil {
+		m.logger.Error("发送通知失败", "task", name, "error", err)
 		return
 	}
-	m.logger.Info("通知已发送", "task", t.name)
+	m.logger.Info("通知已发送", "task", name)
 }
 
 // List 返回所有活动任务的状态，按名称排序。
