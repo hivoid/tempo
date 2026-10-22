@@ -26,7 +26,7 @@ var version = "dev"
 const usage = `tempo — CLI 计时器
 
 用法：
-  tempo daemon                                  前台运行 daemon（调试）
+  tempo daemon [--config PATH]                  前台运行 daemon（调试）
   tempo version                                 打印版本号
   tempo install-service                         安装系统服务（Windows 实际安装；Linux 打印手动安装提示）
   tempo uninstall-service                       卸载系统服务（Windows 实际卸载；Linux 打印手动卸载提示）

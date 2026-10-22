@@ -67,6 +67,8 @@ tempo install-service
 net start tempo
 ```
 
+When run as a service, the process lives in Session 0 where no window it creates is visible. Confirmation dialogs are therefore displayed in the active console session via `WTSSendMessage`, and notifications are delivered by a helper process the service launches in the user session.
+
 ## Quick start
 
 ```bash
@@ -87,9 +89,10 @@ When the timer finishes, a desktop notification is sent by default. After closin
 ## Command reference
 
 ```
-tempo daemon                                  Run the daemon in the foreground (debugging)
+tempo daemon [--config PATH]                  Run the daemon in the foreground (debugging)
 tempo version                                 Print the version
 tempo install-service                         Linux: print systemd unit install instructions; Windows: install the Service
+tempo uninstall-service                       Linux: print systemd unit uninstall instructions; Windows: remove the Service
 
 tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
 tempo list
@@ -145,6 +148,17 @@ cycle = 4
 - `finish_on` controls whether the custom command runs on every phase (`each`) or only when the whole sequence ends (`sequence`) in Pomodoro mode; default `each`.
 - `[pomodoro]` provides global defaults, overridable by CLI flags on `tempo pomo start`.
 
+The daemon loads the config once at startup. After editing the config file, restart the service for changes to take effect:
+
+```bash
+# Linux
+systemctl --user restart tempo
+
+# Windows
+net stop tempo
+net start tempo
+```
+
 ### Custom finish command examples
 
 ```bash
@@ -171,10 +185,12 @@ Phase transitions require confirmation: at the end of each phase a Continue / St
 
 When no interactive tool is available (headless environments), a notification is sent and the sequence auto-continues without interruption.
 
-`status` shows the current phase, completed work count, and remaining time; waiting state appends `(waiting)`:
+Dialog waits are capped at 5 minutes: on Linux the dialog command is killed at the deadline and the platform fallback chain takes over; in Windows service mode the message box auto-closes after the same period.
+
+`status` shows the current phase, completed work count, and remaining time; waiting state appends `(waiting)`. Omit the optional `NAME` to target the only active sequence; when nothing is running it prints `no active pomodoro`:
 
 ```
-phase=work, completed=1/4, remaining=0s (waiting)
+name=focus, phase=work, completed=1/4, remaining=0s (waiting)
 ```
 
 Pause/resume applies to the current phase; cycle progress is preserved.
@@ -216,7 +232,7 @@ go vet ./...
 go build -ldflags "-X main.version=v1.0.0" -o tempo .
 
 # Cross-compile for Windows
-GOOS=windows GOARCH=amd64 go build ./...
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=v1.0.0" -o tempo.exe .
 ```
 
 Platform-specific code is isolated with `//go:build linux` and `//go:build windows`.

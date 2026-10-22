@@ -67,6 +67,8 @@ tempo install-service
 net start tempo
 ```
 
+以服务模式运行时进程位于 Session 0，其创建的任何窗口对用户不可见：确认弹窗改经 `WTSSendMessage` 显示在活动控制台会话，通知由服务在用户会话中拉起的辅助进程投递。
+
 ## 快速开始
 
 ```bash
@@ -87,9 +89,10 @@ tempo stop tea
 ## 命令参考
 
 ```
-tempo daemon                                  前台运行 daemon（调试用）
+tempo daemon [--config PATH]                  前台运行 daemon（调试用）
 tempo version                                 打印版本号
 tempo install-service                         Linux 提示安装 systemd unit；Windows 安装 Service
+tempo uninstall-service                       Linux 提示手动卸载步骤；Windows 卸载 Service
 
 tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
 tempo list
@@ -145,6 +148,17 @@ cycle = 4
 - `finish_on` 控制番茄钟中自定义命令在每阶段（`each`）还是整个序列（`sequence`）结束时执行，默认 `each`。
 - `[pomodoro]` 为全局默认参数，可被 `tempo pomo start` 的 CLI 参数覆盖。
 
+daemon 启动时一次性加载配置，修改配置文件后需重启服务才能生效：
+
+```bash
+# Linux
+systemctl --user restart tempo
+
+# Windows
+net stop tempo
+net start tempo
+```
+
 ### 自定义结束命令示例
 
 ```bash
@@ -172,10 +186,12 @@ tempo pomo stop
 
 无交互工具可用时（无桌面环境）发送通知并自动继续，不中断序列。
 
-`status` 显示当前阶段、已完成专注数和剩余时间；等待确认时追加 `(waiting)`：
+确认弹窗的等待时限为 5 分钟：Linux 上超时后终止弹窗命令并转入平台回退链；Windows 服务模式下消息框到时自动关闭。
+
+`status` 显示当前阶段、已完成专注数和剩余时间；等待确认时追加 `(waiting)`。省略可选的 `NAME` 时作用于唯一活动序列；无活动番茄钟时输出 `no active pomodoro`：
 
 ```
-phase=work, completed=1/4, remaining=0s (waiting)
+name=focus, phase=work, completed=1/4, remaining=0s (waiting)
 ```
 
 暂停/继续作用于当前阶段任务，周期进度不丢失。
@@ -217,7 +233,7 @@ go vet ./...
 go build -ldflags "-X main.version=v1.0.0" -o tempo .
 
 # 交叉编译 Windows
-GOOS=windows GOARCH=amd64 go build ./...
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=v1.0.0" -o tempo.exe .
 ```
 
 平台特定代码通过 `//go:build linux` 与 `//go:build windows` 隔离。
