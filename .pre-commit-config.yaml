@@ -1,2 +1,45 @@
 - id: golangci-lint
   pass_filenames: false
+# pre-commit 配置：Go 项目静态检查与测试门禁
+#
+# 启用：    pre-commit install
+# 全量检查：pre-commit run --all-files
+#
+# 注意：golangci-lint 不支持单文件分析（官方文档明确说明），go build/go test
+# 也需要整仓上下文，因此三个 Go hook 均设置 pass_filenames: false——仍按暂存
+# 区是否有 Go 文件（types: [go]）触发，但执行时不向入口传递文件名，避免
+# 单文件模式下 "undefined: xxx"、"unused" 等假阳性。
+repos:
+  # 通用文件卫生检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace      # 去除行尾空白
+      - id: end-of-file-fixer        # 确保文件以单个换行结尾
+      - id: check-merge-conflict     # 检查残留的冲突标记
+      - id: check-added-large-files  # 防止误提交大文件
+      - id: check-yaml               # YAML 语法检查
+
+  # Go 检查：使用本机已安装的工具链（language: system），不传递文件名
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-build
+        name: go build
+        entry: go build ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+
+      - id: go-test
+        name: go test
+        entry: go test ./...
+        language: system
+        types: [go]
+        pass_filenames: false
