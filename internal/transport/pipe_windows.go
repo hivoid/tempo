@@ -9,11 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"syscall"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
-	"gopkg.in/natefinch/npipe.v2"
+	"github.com/Microsoft/go-winio"
 
 	"tempo/internal/protocol"
 )
@@ -29,12 +26,8 @@ const pipeSDDL = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)"
 
 // pipeServer 基于 Windows 命名管道的 Server 实现。
 type pipeServer struct {
-	listener *npipe.PipeListener
+	listener net.Listener
 	path     string
-
-	// sd 是 Listen 解析出的安全描述符：npipe 每次创建新管道实例都会经
-	// SecurityAttributes 读取它，须随 listener 存活，防止被 GC 回收。
-	sd *windows.SECURITY_DESCRIPTOR
 }
 
 // NewServer 创建 Windows 平台的 IPC Server。
@@ -48,30 +41,24 @@ func SocketPath() string {
 	return pipeName
 }
 
-// Listen 监听命名管道。
+// Listen 监听命名管道。pipeSDDL 由 go-winio 在创建每个管道实例时应用，
+// 无需自行解析 SDDL 或保持描述符存活。
 func (s *pipeServer) Listen() error {
 	if s.listener != nil {
 		return fmt.Errorf("transport: 已在监听 %s", s.path)
 	}
-	sd, err := windows.SecurityDescriptorFromString(pipeSDDL)
-	if err != nil {
-		return fmt.Errorf("transport: 解析管道安全描述符: %w", err)
-	}
-	sa := &syscall.SecurityAttributes{
-		Length:             uint32(unsafe.Sizeof(syscall.SecurityAttributes{})),
-		SecurityDescriptor: uintptr(unsafe.Pointer(sd)),
-	}
-	l, err := npipe.ListenPipe(s.path, sa)
+	l, err := winio.ListenPipe(s.path, &winio.PipeConfig{
+		SecurityDescriptor: pipeSDDL,
+	})
 	if err != nil {
 		return fmt.Errorf("transport: 监听 %s: %w", s.path, err)
 	}
-	s.sd = sd
 	s.listener = l
 	return nil
 }
 
-// Accept 等待并返回下一条连接。npipe 的 Accept 返回 *npipe.PipeConn，
-// 其实现了 net.Conn，据此包装为 transport.Conn。
+// Accept 等待并返回下一条连接。go-winio 的 Accept 直接返回 net.Conn，
+// 据此包装为 transport.Conn。
 func (s *pipeServer) Accept() (Conn, error) {
 	if s.listener == nil {
 		return nil, errors.New("transport: 尚未调用 Listen")

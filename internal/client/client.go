@@ -30,7 +30,8 @@ func Call(req protocol.Request) (protocol.Response, error) {
 	if err != nil {
 		return protocol.Response{}, fmt.Errorf("%w: %w", ErrDaemonNotRunning, err)
 	}
-	defer conn.Close()
+	// 关闭失败无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = conn.Close() }()
 	// 限定整个会话的超时，避免 daemon 无响应时 CLI 悬挂。
 	_ = conn.SetDeadline(time.Now().Add(ipcTimeout))
 
