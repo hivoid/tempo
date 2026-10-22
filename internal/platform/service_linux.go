@@ -15,8 +15,8 @@ func IsWindowsService() (bool, error) {
 }
 
 // RunAsService 在 Linux 上不受支持：daemon 由 systemd 用户服务托管，
-// 不通过进程内服务模式启动。
-func RunAsService(name string, run func() error) error {
+// 不通过进程内服务模式启动。run 的 stop 签名与 Windows 侧保持一致。
+func RunAsService(name string, run func(stop <-chan struct{}) error) error {
 	return errors.New("RunAsService 仅支持 Windows")
 }
 

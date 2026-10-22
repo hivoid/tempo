@@ -50,8 +50,8 @@ func runAsServiceIfNeeded() (bool, error) {
 	if !inService {
 		return false, nil
 	}
-	return true, platform.RunAsService(serviceName, func() error {
-		return runDaemon(defaultConfigPath())
+	return true, platform.RunAsService(serviceName, func(stop <-chan struct{}) error {
+		return runDaemon(defaultConfigPath(), stop)
 	})
 }
 
@@ -121,12 +121,14 @@ func runDaemonCmd(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return runDaemon(*configPath)
+	return runDaemon(*configPath, nil)
 }
 
 // runDaemon 启动 daemon：初始化日志、加载配置并启动 IPC 服务。
-// 由 daemon 子命令（前台调试）与 Windows 服务模式（main_windows.go）共用。
-func runDaemon(configPath string) error {
+// 由 daemon 子命令（前台调试，stop 为 nil）与 Windows 服务模式共用：
+// stop 关闭后 IPC 服务停止接受新连接并优雅返回（Linux 由 systemd 终止进程，
+// 不经过该路径）。
+func runDaemon(configPath string, stop <-chan struct{}) error {
 	logger, err := logging.Init(defaultLogPath())
 	if err != nil {
 		return err
@@ -139,7 +141,7 @@ func runDaemon(configPath string) error {
 	logger.Info("配置已加载", "action", "load_config")
 
 	mgr := daemon.NewManager(cfg, notify.NewNotifier(), logger)
-	return daemon.Serve(mgr)
+	return daemon.ServeWithShutdown(mgr, stop)
 }
 
 // runStart 启动计时任务。

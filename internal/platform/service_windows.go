@@ -14,7 +14,8 @@ import (
 
 // serviceRunner 把 daemon 的 run 生命周期适配为 svc.Handler，由 SCM 启动与停止。
 type serviceRunner struct {
-	run func() error
+	run  func(stop <-chan struct{}) error
+	stop chan struct{} // RunAsService 创建，Execute 收到停止/关机请求时关闭
 }
 
 // IsWindowsService 报告当前进程是否由 SCM 作为服务启动。
@@ -24,13 +25,12 @@ func IsWindowsService() (bool, error) {
 }
 
 // RunAsService 以服务模式运行 run（进程须已由 SCM 启动，name 为服务名）：
-// run 在 goroutine 中执行，收到停止/关机请求后上报 StopPending，
-// 等待 run 退出，最后上报 Stopped。
-//
-// 注意：run 的签名不携带 context，无法从外部强制中断；停止时只能等待其
-// 自行返回（daemon.Serve 的退出机制待 main 集成服务模式时接线）。
-func RunAsService(name string, run func() error) error {
-	return svc.Run(name, &serviceRunner{run: run})
+// run 在 goroutine 中执行，收到停止/关机请求后上报 StopPending 并关闭 stop，
+// run（daemon.ServeWithShutdown）随即停止接受新请求并返回，Execute 等待其
+// 退出后上报 Stopped。run 须在 stop 关闭后的有限时间内返回，否则 SCM 停止
+// 会一直等待。
+func RunAsService(name string, run func(stop <-chan struct{}) error) error {
+	return svc.Run(name, &serviceRunner{run: run, stop: make(chan struct{})})
 }
 
 // Execute 实现 svc.Handler：上报启动/运行状态并处理 SCM 控制请求。
@@ -59,6 +59,10 @@ func (s *serviceRunner) Execute(args []string, req <-chan svc.ChangeRequest, sta
 				status <- c.CurrentStatus
 			case svc.Stop, svc.Shutdown:
 				status <- svc.Status{State: svc.StopPending}
+				// 关闭 stop 通知 run 退出：ServeWithShutdown 收到后关闭 IPC
+				// 监听器并返回，解除此处等待。run 已自行退出的情况下关闭
+				// 无人读取的通道同样安全。
+				close(s.stop)
 				err := <-done
 				status <- svc.Status{State: svc.Stopped}
 				if err != nil {
