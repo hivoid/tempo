@@ -260,9 +260,9 @@ const (
 	MBOk          uint32 = 0x0 // 单个「确定」按钮
 	MBYesNoCancel uint32 = 0x3 // MB_YESNOCANCEL：是/否/取消三按钮
 
-	IDCancel  = 2    // IDCANCEL：用户按 Esc 或关闭窗口
-	IDYes     = 6    // IDYES：「是」
-	IDNo      = 7    // IDNO：「否」
+	IDCancel  = 2     // IDCANCEL：用户按 Esc 或关闭窗口
+	IDYes     = 6     // IDYES：「是」
+	IDNo      = 7     // IDNO：「否」
 	IDTimeout = 32001 // IDTIMEOUT：WTSSendMessage 自动关闭超时
 )
 

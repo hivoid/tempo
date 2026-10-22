@@ -203,11 +203,12 @@ func serviceConfirm(logger *slog.Logger, title, message string) PromptResult {
 // TaskDialogIndirect 不可用时的兜底：是 → 继续、否 → 停止、取消 → 暂停。
 // 调用阻塞至用户选择；MessageBoxW 也失败时按继续处理并记录 WARN。
 func messageBoxConfirm(logger *slog.Logger, titlePtr, textPtr *uint16) PromptResult {
+	// Call 的可变参数为 uintptr：MBYesNoCancel 是 uint32 类型常量，须显式转换。
 	ret, _, _ := procMessageBoxW.Call(
 		0,                                 // hWnd：无父窗口
 		uintptr(unsafe.Pointer(textPtr)),  // lpText：正文（message）
 		uintptr(unsafe.Pointer(titlePtr)), // lpCaption：标题（title）
-		platform.MBYesNoCancel,
+		uintptr(platform.MBYesNoCancel),
 	)
 	switch ret {
 	case platform.IDYes:
