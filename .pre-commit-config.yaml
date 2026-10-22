@@ -1,0 +1,2 @@
+- id: golangci-lint
+  pass_filenames: false
