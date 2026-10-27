@@ -126,6 +126,12 @@ tempo pomo stop [NAME]
 - Linux：`~/.config/tempo/tempo.toml`（`$XDG_CONFIG_HOME` 优先）
 - Windows：`%APPDATA%\tempo\tempo.toml`
 
+配置文件仅由 daemon 读取，CLI 一律经 IPC 交互。Windows 服务模式有一处特殊情况：进程由 SCM 以 LocalSystem 账户启动（不带任何命令行参数），其 `%APPDATA%` 指向服务账户自己的 profile 而非当前用户，因此服务实际读取：
+
+`C:\Windows\System32\config\systemprofile\AppData\Roaming\tempo\tempo.toml`
+
+服务模式下请把 `tempo.toml` 放到该目录（目录不存在时先创建）；当前用户的 `%APPDATA%\tempo\tempo.toml` 仅在前台调试运行 `tempo daemon` 时生效。
+
 示例：
 
 ```toml
@@ -215,6 +221,8 @@ name=focus, phase=work, completed=1/4, remaining=0s (waiting)
 - Windows：`%USERPROFILE%\.local\state\tempo\tempo.log`
 
 在 `tempo.toml` 中设置 `log_path` 可写入其他位置。配置的路径不可用（如无写入权限）时，daemon 直接报错退出，不会静默回退到默认路径。
+
+Windows 服务模式下默认路径同样受账户影响：LocalSystem 的 `%USERPROFILE%` 解析为 `C:\Windows\System32\config\systemprofile`，未配置 `log_path` 时默认日志将落到 `C:\Windows\System32\config\systemprofile\.local\state\tempo\tempo.log`；如需自定义，请在服务账户的配置文件中设置 `log_path`（见[配置](#配置)）。
 
 记录 daemon 启停、任务状态变更、番茄钟阶段转换、通知发送结果和 IPC 错误。
 

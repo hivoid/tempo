@@ -126,6 +126,12 @@ Config file location (`tempo.toml`, previously named `rules.toml` — rename it 
 - Linux: `~/.config/tempo/tempo.toml` (`$XDG_CONFIG_HOME` takes precedence)
 - Windows: `%APPDATA%\tempo\tempo.toml`
 
+The config file is only read by the daemon; the CLI talks over IPC only. One Windows special case: in service mode the process is started by the SCM under the LocalSystem account (with no command-line arguments), whose `%APPDATA%` points at the service account's own profile instead of yours — the service therefore reads:
+
+`C:\Windows\System32\config\systemprofile\AppData\Roaming\tempo\tempo.toml`
+
+Put `tempo.toml` there for service mode (create the directory if it does not exist); `%APPDATA%\tempo\tempo.toml` under your own account only applies when running `tempo daemon` in the foreground for debugging.
+
 Example:
 
 ```toml
@@ -214,6 +220,8 @@ The default log path is:
 - Windows: `%USERPROFILE%\.local\state\tempo\tempo.log`
 
 Set `log_path` in `tempo.toml` to write to a different location. When the configured path is unavailable (e.g. permission denied), the daemon exits with an error instead of silently falling back.
+
+In Windows service mode the default path is subject to the same account rule: LocalSystem's `%USERPROFILE%` resolves to `C:\Windows\System32\config\systemprofile`, so without `log_path` the default log lands in `C:\Windows\System32\config\systemprofile\.local\state\tempo\tempo.log`. Set `log_path` in the service account's config (see [Configuration](#configuration)) to write elsewhere.
 
 Logged events include daemon start/stop, task state changes, Pomodoro phase transitions, notification results, and IPC errors.
 
