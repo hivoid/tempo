@@ -13,10 +13,10 @@ Supported platforms: **Linux** (verified on Arch Linux + Plasma 6) and **Windows
 - **CLI management**: start, pause, resume, list, and stop — all from the command line
 - **Precise pause/resume**: pausing preserves the remaining time; resuming continues from it without resetting
 - **Detached from the terminal**: managed by a systemd user service on Linux and a Windows Service on Windows — no `nohup`
-- **Rule configuration**: preset rules (duration + finish command) in TOML, referenced at runtime with `--rule`
+- **Rule configuration**: preset timer and Pomodoro rules in TOML, referenced at runtime with `--rule`
 - **Custom finish actions**: desktop notification by default, or any command you specify
 - **Native Pomodoro**: work / short break / long break cycling with configurable parameters; each phase end pops a Continue / Stop / Pause dialog, with manual advance supported
-- **Structured logging**: standard library `log/slog`, written to both console and file
+- **Structured logging**: standard library `log/slog`, written to both console and file with configurable path
 
 ## Installation
 
@@ -121,32 +121,40 @@ tempo pomo stop [NAME]
 
 ## Configuration
 
-Config file location:
+Config file location (`tempo.toml`, previously named `rules.toml` — rename it when upgrading):
 
-- Linux: `~/.config/tempo/rules.toml` (`$XDG_CONFIG_HOME` takes precedence)
-- Windows: `%APPDATA%\tempo\rules.toml`
+- Linux: `~/.config/tempo/tempo.toml` (`$XDG_CONFIG_HOME` takes precedence)
+- Windows: `%APPDATA%\tempo\tempo.toml`
 
 Example:
 
 ```toml
-[rules.pomodoro]
-duration = "25m"
-finish_command = "notify-send -t 30000 'Pomodoro finished' 'Take a break'"
-finish_on = "each"
+# Top-level keys must precede any [table] section (TOML syntax).
+log_path = "/var/log/tempo/tempo.log" # empty or omitted: platform default path
 
-[rules.tea]
-duration = "10m"
-
-[pomodoro]
+[pomodoro] # global Pomodoro defaults
 work = "25m"
 short_break = "5m"
 long_break = "15m"
 cycle = 4
+
+[rules.tea] # timer rule: has duration, for `tempo start`
+duration = "10m"
+
+[rules.deep] # Pomodoro rule: has work/short_break/long_break/cycle, for `tempo pomo start`
+work = "50m"
+short_break = "10m"
+long_break = "30m"
+cycle = 2
+finish_command = "notify-send 'Pomodoro phase finished'"
+finish_on = "each"
 ```
 
 - When `finish_command` is empty, the platform default notification is used.
 - `finish_on` controls whether the custom command runs on every phase (`each`) or only when the whole sequence ends (`sequence`) in Pomodoro mode; default `each`.
-- `[pomodoro]` provides global defaults, overridable by CLI flags on `tempo pomo start`.
+- Rules are either timer rules (with `duration`, referenced by `tempo start --rule`) or Pomodoro rules (with any of `work`/`short_break`/`long_break`/`cycle`, referenced by `tempo pomo start --rule`); the two kinds are mutually exclusive and share a single namespace. Referencing an undefined rule or a rule of the wrong kind returns an error.
+- Unset fields of a Pomodoro rule fall back to the `[pomodoro]` section, then to built-in defaults; explicit CLI flags take precedence over both.
+- `log_path` sets the daemon log file path; empty or omitted uses the platform default (see [Logging](#logging)).
 
 The daemon loads the config once at startup. After editing the config file, restart the service for changes to take effect:
 
@@ -173,6 +181,9 @@ tempo start --name work -t 25m --finish "powershell -Command \"Add-Type -Assembl
 
 ```bash
 tempo pomo start --name focus --work 30m --short 5m --long 20m --cycle 3
+
+# Or reference a Pomodoro rule preset (see Configuration)
+tempo pomo start --name writing -r deep
 tempo pomo status
 tempo pomo stop
 ```
@@ -197,8 +208,12 @@ Pause/resume applies to the current phase; cycle progress is preserved.
 
 ## Logging
 
+The default log path is:
+
 - Linux: `~/.local/state/tempo/tempo.log` (`$XDG_STATE_HOME` takes precedence; stdout is also collected by journald when run under systemd)
 - Windows: `%USERPROFILE%\.local\state\tempo\tempo.log`
+
+Set `log_path` in `tempo.toml` to write to a different location. When the configured path is unavailable (e.g. permission denied), the daemon exits with an error instead of silently falling back.
 
 Logged events include daemon start/stop, task state changes, Pomodoro phase transitions, notification results, and IPC errors.
 
@@ -210,7 +225,7 @@ tempo/
 ├── main_linux.go / main_windows.go    Platform entries: service mode detection, install-service
 ├── internal/
 │   ├── protocol/                      Request/response structures
-│   ├── config/                        TOML rule configuration
+│   ├── config/                        TOML configuration
 │   ├── logging/                       slog initialization
 │   ├── client/                        IPC client (CLI side)
 │   ├── daemon/                        Tasks, manager, Pomodoro, request dispatch, phase confirmation dialog

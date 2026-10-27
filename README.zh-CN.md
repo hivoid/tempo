@@ -13,10 +13,10 @@
 - **CLI 管理**：启动、暂停、继续、查看、停止，全部通过命令行完成
 - **精确暂停/继续**：暂停保留剩余时长，继续从剩余时间恢复，不重置
 - **脱离终端**：Linux 由 systemd user service 托管，Windows 由 Windows Service 托管，不使用 `nohup`
-- **规则配置**：TOML 预置规则（时长 + 结束命令），运行时 `--rule` 引用
+- **规则配置**：TOML 预置规则（计时与番茄钟两类），运行时 `--rule` 引用
 - **自定义结束动作**：默认桌面提醒，也可指定任意命令
 - **番茄钟原生支持**：专注/短休/长休自动循环，参数可配置；每阶段结束弹出「继续 / 停止 / 暂停」确认框，支持手动推进
-- **结构化日志**：标准库 `log/slog`，控制台与文件双写
+- **结构化日志**：标准库 `log/slog`，控制台与文件双写，路径可配置
 
 ## 安装
 
@@ -121,32 +121,40 @@ tempo pomo stop [NAME]
 
 ## 配置
 
-配置文件位置：
+配置文件位置（`tempo.toml`，旧版名为 `rules.toml`，升级时请重命名）：
 
-- Linux：`~/.config/tempo/rules.toml`（`$XDG_CONFIG_HOME` 优先）
-- Windows：`%APPDATA%\tempo\rules.toml`
+- Linux：`~/.config/tempo/tempo.toml`（`$XDG_CONFIG_HOME` 优先）
+- Windows：`%APPDATA%\tempo\tempo.toml`
 
 示例：
 
 ```toml
-[rules.pomodoro]
-duration = "25m"
-finish_command = "notify-send -t 30000 '番茄钟结束' '休息一下'"
-finish_on = "each"
+# 顶层键必须写在任何 [table] 段之前（TOML 语法约束）。
+log_path = "/var/log/tempo/tempo.log" # 留空或省略时使用平台默认路径
 
-[rules.tea]
-duration = "10m"
-
-[pomodoro]
+[pomodoro] # 番茄钟全局默认参数
 work = "25m"
 short_break = "5m"
 long_break = "15m"
 cycle = 4
+
+[rules.tea] # 计时规则：含 duration，供 tempo start 使用
+duration = "10m"
+
+[rules.deep] # 番茄钟规则：含 work/short_break/long_break/cycle 之一，供 tempo pomo start 使用
+work = "50m"
+short_break = "10m"
+long_break = "30m"
+cycle = 2
+finish_command = "notify-send '番茄钟阶段结束'"
+finish_on = "each"
 ```
 
 - `finish_command` 为空时使用平台默认提醒。
 - `finish_on` 控制番茄钟中自定义命令在每阶段（`each`）还是整个序列（`sequence`）结束时执行，默认 `each`。
-- `[pomodoro]` 为全局默认参数，可被 `tempo pomo start` 的 CLI 参数覆盖。
+- 规则分两类：计时规则（含 `duration`，由 `tempo start --rule` 引用）与番茄钟规则（含 `work`/`short_break`/`long_break`/`cycle` 之一，由 `tempo pomo start --rule` 引用）；两类字段互斥、共用同一命名空间，引用未定义的规则或类型不匹配时返回错误。
+- 番茄钟规则未填写的字段回退到 `[pomodoro]` 全局默认，再回退到内置默认值；CLI 显式参数优先级最高。
+- `log_path` 指定 daemon 日志路径，留空或省略时使用平台默认路径（见[日志](#日志)）。
 
 daemon 启动时一次性加载配置，修改配置文件后需重启服务才能生效：
 
@@ -173,6 +181,9 @@ tempo start --name work -t 25m --finish "powershell -Command \"Add-Type -Assembl
 
 ```bash
 tempo pomo start --name focus --work 30m --short 5m --long 20m --cycle 3
+
+# 或引用番茄钟预置规则（见配置一节）
+tempo pomo start --name writing -r deep
 tempo pomo status
 tempo pomo next focus
 tempo pomo stop
@@ -198,8 +209,12 @@ name=focus, phase=work, completed=1/4, remaining=0s (waiting)
 
 ## 日志
 
+默认日志路径：
+
 - Linux：`~/.local/state/tempo/tempo.log`（`$XDG_STATE_HOME` 优先；systemd 托管时同时由 journald 收集 stdout）
 - Windows：`%USERPROFILE%\.local\state\tempo\tempo.log`
+
+在 `tempo.toml` 中设置 `log_path` 可写入其他位置。配置的路径不可用（如无写入权限）时，daemon 直接报错退出，不会静默回退到默认路径。
 
 记录 daemon 启停、任务状态变更、番茄钟阶段转换、通知发送结果和 IPC 错误。
 
@@ -211,7 +226,7 @@ tempo/
 ├── main_linux.go / main_windows.go    平台入口：服务模式检测、install-service
 ├── internal/
 │   ├── protocol/                      请求/响应结构
-│   ├── config/                        TOML 规则配置
+│   ├── config/                        TOML 配置
 │   ├── logging/                       slog 初始化
 │   ├── client/                        IPC 客户端（CLI 侧）
 │   ├── daemon/                        任务、管理器、番茄钟、请求分发、阶段确认弹窗
