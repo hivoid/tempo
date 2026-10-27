@@ -138,26 +138,33 @@ func main() {
 // runDaemonCmd 处理 daemon 子命令：解析 --config 后进入 daemon 启动逻辑。
 func runDaemonCmd(args []string) error {
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	configPath := fs.String("config", defaultConfigPath(), "规则配置 TOML 路径")
+	configPath := fs.String("config", defaultConfigPath(), "配置 TOML 路径")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	return runDaemon(*configPath, nil)
 }
 
-// runDaemon 启动 daemon：初始化日志、加载配置并启动 IPC 服务。
+// runDaemon 启动 daemon：加载配置、初始化日志并启动 IPC 服务。
 // 由 daemon 子命令（前台调试，stop 为 nil）与 Windows 服务模式共用：
 // stop 关闭后 IPC 服务停止接受新连接并优雅返回（Linux 由 systemd 终止进程，
-// 不经过该路径）。
+// 不经过该路径）。日志路径取配置中的 log_path，缺省回退平台默认路径；
+// 配置解析失败时其 log_path 不可信，直接报错退出（stderr 可见）。
 func runDaemon(configPath string, stop <-chan struct{}) error {
-	logger, err := logging.Init(defaultLogPath())
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(configPath)
+	logPath := cfg.LogPath
+	if logPath == "" {
+		logPath = defaultLogPath()
+	}
+	logger, err := logging.Init(logPath)
 	if err != nil {
-		return err
+		// 用户显式配置的日志路径不可用（无权限、磁盘满等）时直接退出，
+		// 静默回退默认路径会让日志去向难以排查。
+		return fmt.Errorf("初始化日志 %s: %w", logPath, err)
 	}
 	logger.Info("配置已加载", "action", "load_config")
 
@@ -398,20 +405,21 @@ func callAndReport(req protocol.Request) error {
 	return nil
 }
 
-// defaultConfigPath 返回默认规则配置路径：$XDG_CONFIG_HOME/tempo/rules.toml。
+// defaultConfigPath 返回默认配置路径：$XDG_CONFIG_HOME/tempo/tempo.toml。
 func defaultConfigPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		home, homeErr := os.UserHomeDir()
 		if homeErr != nil {
-			return "rules.toml"
+			return "tempo.toml"
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "tempo", "rules.toml")
+	return filepath.Join(dir, "tempo", "tempo.toml")
 }
 
-// defaultLogPath 返回默认日志路径：$XDG_STATE_HOME/tempo/tempo.log，回退 ~/.local/state/tempo/tempo.log。
+// defaultLogPath 返回平台默认日志路径（配置未指定 log_path 时的兜底）：
+// $XDG_STATE_HOME/tempo/tempo.log，回退 ~/.local/state/tempo/tempo.log。
 func defaultLogPath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
 		return filepath.Join(dir, "tempo", "tempo.log")

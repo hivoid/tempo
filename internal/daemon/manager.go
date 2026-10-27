@@ -73,6 +73,9 @@ func (m *Manager) Start(name, rule, duration, finishCmd string) error {
 		if !ok {
 			return fmt.Errorf("任务 %s: 规则 %q 未定义", name, rule)
 		}
+		if r.Kind == config.RulePomodoro {
+			return fmt.Errorf("任务 %s: 规则 %q 是番茄钟规则，不能用于计时任务", name, rule)
+		}
 		if d == 0 {
 			d = r.Duration
 		}
@@ -249,23 +252,35 @@ func (m *Manager) unregisterTask(name string) {
 }
 
 // PomodoroOptions 描述番茄钟序列参数。零值字段与 FinishOn 的缺省值由
-// PomodoroTracker.fillDefaults 在构造时按「显式传入 > 全局 [pomodoro] 配置 >
-// PRD 默认值」补全。
+// PomodoroTracker.fillDefaults 在构造时按「显式传入 > 规则档位 > 全局
+// [pomodoro] 配置 > PRD 默认值」补全。
 type PomodoroOptions struct {
 	Work       time.Duration // 专注时长
 	ShortBreak time.Duration // 短休时长
 	LongBreak  time.Duration // 长休时长
 	Cycle      int           // 长休前的专注次数
-	Rule       string        // 关联预置规则名
-	FinishOn   string        // "each" | "sequence"，控制自定义命令执行时机
+	Rule       string        // 关联预置番茄钟规则名（Kind==RulePomodoro），提供时长档位与 finish 默认值
+	FinishOn   string        // "each" | "sequence"，控制自定义命令执行时机；空值回退规则配置
 }
 
 // PomodoroStart 启动番茄钟序列，自动在专注/短休/长休间切换（PRD F15）。
 // 序列名同时作为各阶段任务名注册到 tasks，用户可直接对当前阶段执行
-// pause/resume/stop（F20）；与已有任务或番茄钟重名时返回错误。
+// pause/resume/stop（F20）；与已有任务或番茄钟重名、或 Rule 关联的预置规则
+// 未定义/非番茄钟类型时返回错误。
 func (m *Manager) PomodoroStart(name string, opts PomodoroOptions) error {
 	if name == "" {
 		return errors.New("番茄钟名称不能为空")
+	}
+	// 规则校验须在创建 tracker 之前完成：newPomodoroTracker 不返回错误，其
+	// fillDefaults 依赖规则为已定义的番茄钟类型（时长档位与 finish_on 默认值）。
+	if opts.Rule != "" {
+		r, ok := m.cfg.Rules[opts.Rule]
+		if !ok {
+			return fmt.Errorf("番茄钟 %s: 规则 %q 未定义", name, opts.Rule)
+		}
+		if r.Kind != config.RulePomodoro {
+			return fmt.Errorf("番茄钟 %s: 规则 %q 是计时规则，不能用于番茄钟", name, opts.Rule)
+		}
 	}
 
 	m.mu.Lock()

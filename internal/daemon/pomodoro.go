@@ -46,18 +46,34 @@ func newPomodoroTracker(name string, opts PomodoroOptions, mgr *Manager) *Pomodo
 	return p
 }
 
-// fillDefaults 补全序列参数，优先级：显式传入 > 全局 [pomodoro] 配置 > PRD 默认值
-// （F16/F17，后两级由 Config.PomodoroDefaults 统一解析与兜底）；
-// FinishOn 空值或非法值一律按缺省 each 处理（F21）。
+// fillDefaults 补全序列参数，回退优先级：显式传入（CLI）> 规则档位 > 全局
+// [pomodoro] 配置 > PRD 默认值（后两级由 Config.PomodoroDefaults 统一解析与
+// 兜底）；FinishOn 空值或非法值一律按缺省 each 处理（F21），规则配置的
+// finish_on 作为 CLI 未显式传入时的默认值。
 func (p *PomodoroTracker) fillDefaults() {
 	work, short, long, cycle := p.mgr.cfg.PomodoroDefaults()
 
-	p.opts.Work = firstPositive(p.opts.Work, work)
-	p.opts.ShortBreak = firstPositive(p.opts.ShortBreak, short)
-	p.opts.LongBreak = firstPositive(p.opts.LongBreak, long)
-	if p.opts.Cycle <= 0 {
-		p.opts.Cycle = cycle
+	// 调用前 Manager.PomodoroStart 已校验规则存在且为番茄钟类型；此处对规则
+	// 缺失或类型不符按无规则档位处理，保持构造路径健壮。
+	var rWork, rShort, rLong time.Duration
+	var rCycle int
+	if r, ok := p.mgr.cfg.Rules[p.opts.Rule]; ok && r.Kind == config.RulePomodoro {
+		rWork, rShort, rLong, rCycle = r.Work, r.ShortBreak, r.LongBreak, r.Cycle
+		if p.opts.FinishOn == "" {
+			p.opts.FinishOn = r.FinishOn
+		}
 	}
+
+	p.opts.Work = firstPositive(p.opts.Work, rWork, work)
+	p.opts.ShortBreak = firstPositive(p.opts.ShortBreak, rShort, short)
+	p.opts.LongBreak = firstPositive(p.opts.LongBreak, rLong, long)
+	switch {
+	case p.opts.Cycle > 0:
+		cycle = p.opts.Cycle
+	case rCycle > 0:
+		cycle = rCycle
+	}
+	p.opts.Cycle = cycle
 	if p.opts.FinishOn != config.FinishOnSequence {
 		p.opts.FinishOn = config.FinishOnEach
 	}
