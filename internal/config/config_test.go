@@ -142,3 +142,110 @@ func TestDefaultPomodoro(t *testing.T) {
 		t.Errorf("DefaultPomodoro() = (%v, %v, %v, %d)", work, short, long, cycle)
 	}
 }
+
+func TestLoadLogPath(t *testing.T) {
+	path := writeConfig(t, `
+log_path = "/var/log/tempo/tempo.log"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogPath != "/var/log/tempo/tempo.log" {
+		t.Errorf("LogPath = %q, want /var/log/tempo/tempo.log", cfg.LogPath)
+	}
+}
+
+func TestLoadPomodoroRule(t *testing.T) {
+	path := writeConfig(t, `
+[rules.deep]
+work = "50m"
+short_break = "10m"
+long_break = "30m"
+cycle = 2
+finish_command = "echo done"
+finish_on = "each"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rule, ok := cfg.Rules["deep"]
+	if !ok {
+		t.Fatal("缺少规则 deep")
+	}
+	if rule.Kind != RulePomodoro {
+		t.Errorf("deep.Kind = %v, want RulePomodoro", rule.Kind)
+	}
+	if rule.Work != 50*time.Minute || rule.ShortBreak != 10*time.Minute ||
+		rule.LongBreak != 30*time.Minute || rule.Cycle != 2 {
+		t.Errorf("deep 时长字段 = %+v", rule)
+	}
+	if rule.Duration != 0 {
+		t.Errorf("番茄钟规则不应设置 Duration，得到 %v", rule.Duration)
+	}
+	if rule.FinishCommand != "echo done" || rule.FinishOn != FinishOnEach {
+		t.Errorf("deep finish 字段 = (%q, %q)", rule.FinishCommand, rule.FinishOn)
+	}
+}
+
+func TestLoadPomodoroRulePartialFields(t *testing.T) {
+	// 番茄钟规则允许只配置部分字段：未填时长为 0 表示未设置，由 fillDefaults
+	// 按全局默认与内置默认补全；出现任一番茄钟字段即判别为番茄钟规则。
+	path := writeConfig(t, `
+[rules.quick]
+work = "15m"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rule := cfg.Rules["quick"]
+	if rule.Kind != RulePomodoro {
+		t.Errorf("quick.Kind = %v, want RulePomodoro", rule.Kind)
+	}
+	if rule.Work != 15*time.Minute || rule.ShortBreak != 0 || rule.LongBreak != 0 || rule.Cycle != 0 {
+		t.Errorf("quick 时长字段 = %+v", rule)
+	}
+}
+
+func TestLoadRuleTypeConflict(t *testing.T) {
+	path := writeConfig(t, `
+[rules.bad]
+duration = "25m"
+work = "50m"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "不能同时配置") {
+		t.Errorf("duration 与番茄钟字段混用应报错，得到: %v", err)
+	}
+}
+
+func TestLoadRuleMissingFields(t *testing.T) {
+	path := writeConfig(t, `
+[rules.empty]
+finish_command = "echo hi"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "缺少 duration") {
+		t.Errorf("未配置任何时长字段的规则应报错，得到: %v", err)
+	}
+}
+
+func TestLoadInvalidPomodoroRuleDuration(t *testing.T) {
+	path := writeConfig(t, `
+[rules.bad]
+work = "0m"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "正时长") {
+		t.Errorf("非正的番茄钟时长应报错，得到: %v", err)
+	}
+}
+
+func TestLoadNegativeCycle(t *testing.T) {
+	path := writeConfig(t, `
+[rules.bad]
+cycle = -1
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "cycle 不能为负") {
+		t.Errorf("负数 cycle 应报错，得到: %v", err)
+	}
+}
