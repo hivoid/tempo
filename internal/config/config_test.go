@@ -10,7 +10,7 @@ import (
 
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "rules.toml")
+	path := filepath.Join(t.TempDir(), "tempo.toml")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestLoadInvalidRuleDuration(t *testing.T) {
 [rules.bad]
 duration = "abc"
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "解析时长") {
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "解析 duration") {
 		t.Errorf("非法规则时长应报错，得到: %v", err)
 	}
 }

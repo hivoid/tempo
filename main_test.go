@@ -8,7 +8,7 @@ import (
 func TestDefaultConfigPathPrefersXDGConfigHome(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	if got, want := defaultConfigPath(), filepath.Join(dir, "tempo", "rules.toml"); got != want {
+	if got, want := defaultConfigPath(), filepath.Join(dir, "tempo", "tempo.toml"); got != want {
 		t.Errorf("defaultConfigPath() = %q, want %q", got, want)
 	}
 }
@@ -17,7 +17,7 @@ func TestDefaultConfigPathFallsBackToHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
-	if got, want := defaultConfigPath(), filepath.Join(home, ".config", "tempo", "rules.toml"); got != want {
+	if got, want := defaultConfigPath(), filepath.Join(home, ".config", "tempo", "tempo.toml"); got != want {
 		t.Errorf("defaultConfigPath() = %q, want %q", got, want)
 	}
 }
