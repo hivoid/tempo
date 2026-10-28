@@ -157,7 +157,7 @@ work = "50m"
 short_break = "10m"
 long_break = "30m"
 cycle = 2
-finish_each = "notify-send 'Pomodoro phase finished'" # finish event at every phase end; empty or false runs nothing
+finish_each = "paplay /usr/share/sounds/freedesktop/stereo/complete.oga" # finish event at every phase end; empty or false runs nothing
 finish_sequence = "backup.sh" # finish event run once when the sequence is stopped; empty or false runs nothing
 ```
 
@@ -199,11 +199,11 @@ tempo start --name work -t 25m --finish-notify "powershell -Command \"Add-Type -
 tempo start --name work -t 25m --finish "backup.sh"
 ```
 
-The Pomodoro has no finish-reminder customization (phase switches are prompted by the confirmation dialog) — only finish events: `--finish-each` runs at every phase end and `--finish-sequence` runs once when the sequence is stopped; empty (default) runs nothing.
+The Pomodoro has no finish-reminder customization (phase switches are prompted by the confirmation dialog) — only finish events: `--finish-each` runs at every phase end and `--finish-sequence` runs once when the sequence is stopped; empty (default) runs nothing. Note that every phase end already pops the confirmation dialog, so `--finish-each` suits extra actions like playing a sound or writing a log — not for sending yet another notification.
 
 ```bash
-# Notify at every phase end; run a backup when the sequence is stopped
-tempo pomo start --name focus --work 30m --short 5m --finish-each "notify-send 'phase finished'" --finish-sequence "backup.sh"
+# Play a sound at every phase end; run a backup when the sequence is stopped
+tempo pomo start --name focus --work 30m --short 5m --finish-each "paplay /usr/share/sounds/freedesktop/stereo/complete.oga" --finish-sequence "backup.sh"
 ```
 
 ## Pomodoro

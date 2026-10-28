@@ -157,7 +157,7 @@ work = "50m"
 short_break = "10m"
 long_break = "30m"
 cycle = 2
-finish_each = "notify-send '番茄钟阶段结束'" # 每个阶段结束时执行；留空或 false 不执行
+finish_each = "paplay /usr/share/sounds/freedesktop/stereo/complete.oga" # 每个阶段结束时执行；留空或 false 不执行
 finish_sequence = "backup.sh" # 整个序列终止时执行一次；留空或 false 不执行
 ```
 
@@ -199,11 +199,11 @@ tempo start --name work -t 25m --finish-notify "powershell -Command \"Add-Type -
 tempo start --name work -t 25m --finish "backup.sh"
 ```
 
-番茄钟没有结束提醒定制（阶段切换由确认弹窗提示），只有结束事件：`--finish-each` 每个阶段结束时执行，`--finish-sequence` 整个序列终止时执行一次；留空（默认）不执行。
+番茄钟没有结束提醒定制（阶段切换由确认弹窗提示），只有结束事件：`--finish-each` 每个阶段结束时执行，`--finish-sequence` 整个序列终止时执行一次；留空（默认）不执行。注意每个阶段结束本就会弹确认框，`--finish-each` 适合提示音、写日志等附加动作，不要用它再发一遍通知。
 
 ```bash
-# 每个阶段结束时通知，整个序列终止时执行备份
-tempo pomo start --name focus --work 30m --short 5m --finish-each "notify-send '阶段结束'" --finish-sequence "backup.sh"
+# 每个阶段结束播放提示音，整个序列终止时执行备份
+tempo pomo start --name focus --work 30m --short 5m --finish-each "paplay /usr/share/sounds/freedesktop/stereo/complete.oga" --finish-sequence "backup.sh"
 ```
 
 ## 番茄钟
