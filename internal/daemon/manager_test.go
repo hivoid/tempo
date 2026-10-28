@@ -327,16 +327,18 @@ func newRecordingLogger(buf *syncBuffer) *slog.Logger {
 }
 
 // TestStartLogsTaskData 验证启动任务时记录名称、规则、实际时长与结束命令。
+// 断言值不含空格：slog TextHandler 会给含空格的值加引号（如 "echo synced"），
+// 断言避免耦合该引用行为。
 func TestStartLogsTaskData(t *testing.T) {
 	buf := &syncBuffer{}
 	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
 
-	if err := m.Start("tea", "", "10m", "notify-done", "echo synced"); err != nil {
+	if err := m.Start("tea", "", "10m", "notify-done", "echo-done"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	out := buf.String()
-	for _, want := range []string{"task=tea", "duration=10m0s", "finish_notify=notify-done", "finish_event=echo synced", "action=start"} {
+	for _, want := range []string{"task=tea", "duration=10m0s", "finish_notify=notify-done", "finish_event=echo-done", "action=start"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("启动日志缺少 %q，实际输出：%s", want, out)
 		}
