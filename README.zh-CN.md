@@ -14,7 +14,7 @@
 - **精确暂停/继续**：暂停保留剩余时长，继续从剩余时间恢复，不重置
 - **脱离终端**：Linux 由 systemd user service 托管，Windows 由 Windows Service 托管，不使用 `nohup`
 - **规则配置**：TOML 预置规则（计时与番茄钟两类），运行时 `--rule` 引用
-- **自定义结束动作**：默认桌面提醒，也可指定任意命令
+- **自定义结束提醒与结束事件**：计时结束默认弹出提醒，可指定任意命令替代；还可为计时到点、番茄钟每阶段与整个序列终止配置结束事件
 - **番茄钟原生支持**：专注/短休/长休自动循环，参数可配置；每阶段结束弹出「继续 / 停止 / 暂停」确认框，支持手动推进
 - **结构化日志**：标准库 `log/slog`，控制台与文件双写，路径可配置
 
@@ -84,7 +84,7 @@ tempo resume tea
 tempo stop tea
 ```
 
-计时结束时默认发送桌面通知。关闭终端后 daemon 继续计时，到点照常提醒。
+计时结束时默认弹出结束提醒（有交互组件时为需点击的提醒框，否则回退桌面通知）。关闭终端后 daemon 继续计时，到点照常提醒。
 
 ## 命令参考
 
@@ -149,7 +149,7 @@ cycle = 4
 
 [rules.tea] # 计时规则：含 duration，供 tempo start 使用
 duration = "10m"
-# finish_notify = "..." # 自定义计时结束提醒命令；留空使用平台默认通知
+# finish_notify = "..." # 自定义计时结束提醒命令；留空使用平台默认提醒
 # finish = "..."        # 计时结束事件命令，计时到点执行一次；留空或 false 不执行
 
 [rules.deep] # 番茄钟规则：含 work/short_break/long_break/cycle 之一，供 tempo pomo start 使用
@@ -161,8 +161,8 @@ finish_each = "notify-send '番茄钟阶段结束'" # 每个阶段结束时执�
 finish_sequence = "backup.sh" # 整个序列终止时执行一次；留空或 false 不执行
 ```
 
-- 计时规则用 `finish_notify` 自定义结束提醒（留空使用平台默认通知），用 `finish` 追加结束事件——计时到点执行一次的命令。
-- 番茄钟规则改为两个可独立配置的结束事件（不同于通知、没有默认动作）：`finish_each` 在每个阶段结束时执行，`finish_sequence` 在整个序列终止时执行一次；留空或 `false` 均不执行。
+- 计时规则用 `finish_notify` 自定义结束提醒（留空使用平台默认提醒），用 `finish` 追加结束事件——计时到点执行一次的命令。
+- 番茄钟规则有两个可独立配置的结束事件（不同于提醒、没有默认动作）：`finish_each` 在每个阶段结束时执行，`finish_sequence` 在整个序列终止时执行一次；留空或 `false` 均不执行。
 - 旧选项 `finish_on` 与 `finish_command` 键已移除，配置中仍出现（或结束事件键用错规则类型）时会报错并提示迁移。
 - CLI 参数显式传入时覆盖规则配置：`tempo start` 用 `--finish-notify/-f` 与 `--finish/-F`，`tempo pomo start` 用 `--finish-each/-e` 与 `--finish-sequence/-S`。
 - 规则分两类：计时规则（含 `duration`，由 `tempo start --rule` 引用）与番茄钟规则（含 `work`/`short_break`/`long_break`/`cycle` 之一，由 `tempo pomo start --rule` 引用）；两类字段互斥、共用同一命名空间，引用未定义的规则或类型不匹配时返回错误。
@@ -180,14 +180,30 @@ net stop tempo
 net start tempo
 ```
 
-### 自定义结束命令示例
+### 自定义结束提醒与结束事件示例
+
+`--finish-notify` 替代默认结束提醒：设置了它就不再弹默认提醒。
 
 ```bash
-# Linux：弹出必须点击关闭的对话框
-tempo start --name work -t 25m --finish "kdialog --msgbox '25 分钟到了'"
+# Linux：弹出必须点击关闭的对话框（替代默认提醒）
+tempo start --name work -t 25m --finish-notify "kdialog --msgbox '25 分钟到了'"
 
-# Windows：弹出消息框
-tempo start --name work -t 25m --finish "powershell -Command \"Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('25 分钟到了')\""
+# Windows：弹出消息框（替代默认提醒）
+tempo start --name work -t 25m --finish-notify "powershell -Command \"Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('25 分钟到了')\""
+```
+
+`--finish` 是结束事件：到点在默认提醒之外额外执行一次（未设置提醒时默认提醒照常出现）。
+
+```bash
+# Linux：计时到点弹默认提醒，同时执行自定义命令
+tempo start --name work -t 25m --finish "backup.sh"
+```
+
+番茄钟没有结束提醒定制（阶段切换由确认弹窗提示），只有结束事件：`--finish-each` 每个阶段结束时执行，`--finish-sequence` 整个序列终止时执行一次；留空（默认）不执行。
+
+```bash
+# 每个阶段结束时通知，整个序列终止时执行备份
+tempo pomo start --name focus --work 30m --short 5m --finish-each "notify-send '阶段结束'" --finish-sequence "backup.sh"
 ```
 
 ## 番茄钟

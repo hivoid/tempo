@@ -14,7 +14,7 @@ Supported platforms: **Linux** (verified on Arch Linux + Plasma 6) and **Windows
 - **Precise pause/resume**: pausing preserves the remaining time; resuming continues from it without resetting
 - **Detached from the terminal**: managed by a systemd user service on Linux and a Windows Service on Windows — no `nohup`
 - **Rule configuration**: preset timer and Pomodoro rules in TOML, referenced at runtime with `--rule`
-- **Custom finish actions**: desktop notification by default, or any command you specify
+- **Custom finish notification and events**: timer completion pops a reminder by default, replaceable with any command; finish events additionally run commands on timer completion, at every Pomodoro phase end, and on sequence stop
 - **Native Pomodoro**: work / short break / long break cycling with configurable parameters; each phase end pops a Continue / Stop / Pause dialog, with manual advance supported
 - **Structured logging**: standard library `log/slog`, written to both console and file with configurable path
 
@@ -84,7 +84,7 @@ tempo resume tea
 tempo stop tea
 ```
 
-When the timer finishes, a desktop notification is sent by default. After closing the terminal, the daemon keeps timing and still notifies on completion.
+When the timer finishes, a finish reminder pops up by default: a click-to-dismiss dialog when an interactive tool is available, falling back to a plain desktop notification otherwise. After closing the terminal, the daemon keeps timing and still reminds on completion.
 
 ## Command reference
 
@@ -161,8 +161,8 @@ finish_each = "notify-send 'Pomodoro phase finished'" # finish event at every ph
 finish_sequence = "backup.sh" # finish event run once when the sequence is stopped; empty or false runs nothing
 ```
 
-- Timer rules customize the finish notification with `finish_notify` (empty: platform default notification) and may add a finish event with `finish` — a command run once when the timer completes.
-- Pomodoro rules instead have two independently configurable finish events, distinct from notifications and without a default action: `finish_each` runs at the end of every phase and `finish_sequence` runs once when the sequence is stopped; an empty value or `false` runs nothing.
+- Timer rules customize the finish reminder with `finish_notify` (empty: platform default reminder) and may add a finish event with `finish` — a command run once when the timer completes.
+- Pomodoro rules instead have two independently configurable finish events, distinct from reminders and without a default action: `finish_each` runs at the end of every phase and `finish_sequence` runs once when the sequence is stopped; an empty value or `false` runs nothing.
 - The old `finish_on` option and `finish_command` key have been removed; a config still containing them (or finish-event keys in the wrong rule kind) is rejected with a migration hint.
 - CLI flags override rule presets: `--finish-notify/-f` and `--finish/-F` for `tempo start`, `--finish-each/-e` and `--finish-sequence/-S` for `tempo pomo start`.
 - Rules are either timer rules (with `duration`, referenced by `tempo start --rule`) or Pomodoro rules (with any of `work`/`short_break`/`long_break`/`cycle`, referenced by `tempo pomo start --rule`); the two kinds are mutually exclusive and share a single namespace. Referencing an undefined rule or a rule of the wrong kind returns an error.
@@ -180,14 +180,30 @@ net stop tempo
 net start tempo
 ```
 
-### Custom finish command examples
+### Custom finish notification and finish-event examples
+
+`--finish-notify` replaces the default finish reminder: when set, the default reminder no longer pops up.
 
 ```bash
-# Linux: modal dialog that must be clicked to dismiss
-tempo start --name work -t 25m --finish "kdialog --msgbox '25 minutes are up'"
+# Linux: modal dialog that must be clicked to dismiss (replaces the default reminder)
+tempo start --name work -t 25m --finish-notify "kdialog --msgbox '25 minutes are up'"
 
-# Windows: message box
-tempo start --name work -t 25m --finish "powershell -Command \"Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('25 minutes are up')\""
+# Windows: message box (replaces the default reminder)
+tempo start --name work -t 25m --finish-notify "powershell -Command \"Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('25 minutes are up')\""
+```
+
+`--finish` is the finish event: it runs once when the timer completes, in addition to the default reminder (with no reminder command, the default reminder still appears).
+
+```bash
+# Linux: the default reminder pops up, and the custom command runs alongside
+tempo start --name work -t 25m --finish "backup.sh"
+```
+
+The Pomodoro has no finish-reminder customization (phase switches are prompted by the confirmation dialog) — only finish events: `--finish-each` runs at every phase end and `--finish-sequence` runs once when the sequence is stopped; empty (default) runs nothing.
+
+```bash
+# Notify at every phase end; run a backup when the sequence is stopped
+tempo pomo start --name focus --work 30m --short 5m --finish-each "notify-send 'phase finished'" --finish-sequence "backup.sh"
 ```
 
 ## Pomodoro
