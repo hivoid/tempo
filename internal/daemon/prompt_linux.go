@@ -35,11 +35,6 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 		err := exec.CommandContext(ctx, "kdialog", "--title", title,
 			"--yes-label", "继续", "--no-label", "停止", "--cancel-label", "暂停",
 			"--yesnocancel", message).Run()
-		if errors.Is(err, context.DeadlineExceeded) {
-			// 用户在时限内未响应：静默进入 waiting，不重试下一个组件、不发通知。
-			logger.Info("确认弹窗超时未响应", "tool", "kdialog", "result", PromptTimeout)
-			return PromptTimeout
-		}
 		switch exitCode(err) {
 		case 0:
 			logger.Info("确认弹窗已选择", "tool", "kdialog", "result", PromptContinue)
@@ -50,9 +45,15 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 		case 2:
 			logger.Info("确认弹窗已选择", "tool", "kdialog", "result", PromptPause)
 			return PromptPause
-		default:
-			logger.Error("kdialog 确认失败，尝试 zenity", "error", err)
 		}
+		// 超时被杀的进程以信号退出（退出码 -1），错误链不含
+		// context.DeadlineExceeded，只能以 ctx 状态判别超时。
+		if ctx.Err() != nil {
+			// 用户在时限内未响应：静默进入 waiting，不重试下一个组件、不发通知。
+			logger.Info("确认弹窗超时未响应", "tool", "kdialog", "result", PromptTimeout)
+			return PromptTimeout
+		}
+		logger.Error("kdialog 确认失败，尝试 zenity", "error", err)
 	}
 	if _, err := exec.LookPath("zenity"); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
@@ -61,11 +62,6 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 			"--title", title, "--text", message,
 			"--ok-label", "继续", "--cancel-label", "停止",
 			"--extra-button", "暂停").Output()
-		if errors.Is(err, context.DeadlineExceeded) {
-			// 用户在时限内未响应：静默进入 waiting，不重试下一个组件、不发通知。
-			logger.Info("确认弹窗超时未响应", "tool", "zenity", "result", PromptTimeout)
-			return PromptTimeout
-		}
 		switch {
 		case err == nil:
 			logger.Info("确认弹窗已选择", "tool", "zenity", "result", PromptContinue)
@@ -76,9 +72,15 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 		case exitCode(err) == 1:
 			logger.Info("确认弹窗已选择", "tool", "zenity", "result", PromptStop)
 			return PromptStop
-		default:
-			logger.Error("zenity 确认失败，尝试 notify-send", "error", err)
 		}
+		// 同 kdialog：被超时杀掉的进程不会在错误链带回 DeadlineExceeded，
+		// 以 ctx 状态判别；用户选择的退出码已在前面的分支返回。
+		if ctx.Err() != nil {
+			// 用户在时限内未响应：静默进入 waiting，不重试下一个组件、不发通知。
+			logger.Info("确认弹窗超时未响应", "tool", "zenity", "result", PromptTimeout)
+			return PromptTimeout
+		}
+		logger.Error("zenity 确认失败，尝试 notify-send", "error", err)
 	}
 	if _, err := exec.LookPath("notify-send"); err == nil {
 		// 仅通知、无法阻塞确认：正文用回退文案，通知送达后自动继续。
