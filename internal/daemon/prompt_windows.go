@@ -179,9 +179,9 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 // serviceConfirm 是 askConfirm 在服务模式（Session 0）下的实现：Session 0 中
 // 弹不出任何可见窗口，改为经 WTSSendMessage 向活动控制台会话桌面发送三按钮
 // 消息框并同步等待选择：是 → 继续、否 → 停止、取消 → 暂停，超时自动关闭
-// （IDTIMEOUT）同样按暂停处理，让序列停留在待确认状态。调用失败 → 记录
-// WARN 后按继续处理，与 TaskDialogIndirect 的失败回退语义一致。至多阻塞
-// promptTimeout。
+// （IDTIMEOUT）返回 PromptTimeout，与暂停同样让序列静默进入 waiting 等待
+// 手动推进。调用失败 → 记录 WARN 后按继续处理，与 TaskDialogIndirect 的
+// 失败回退语义一致。至多阻塞 promptTimeout。
 func serviceConfirm(logger *slog.Logger, title, message string) PromptResult {
 	resp, err := platform.SendMessageToUserSession(title, message, platform.MBYesNoCancel, promptTimeout, true)
 	if err != nil {
@@ -193,7 +193,10 @@ func serviceConfirm(logger *slog.Logger, title, message string) PromptResult {
 		return PromptContinue
 	case platform.IDNo:
 		return PromptStop
-	case platform.IDCancel, platform.IDTimeout:
+	case platform.IDTimeout:
+		// 超时自动关闭：与用户选择暂停同样静默进入 waiting，仅日志可区分。
+		return PromptTimeout
+	case platform.IDCancel:
 		return PromptPause
 	default:
 		logger.Warn("WTSSendMessage returned unexpected response, auto-continue", "response", resp)

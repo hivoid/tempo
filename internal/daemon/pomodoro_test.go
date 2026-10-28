@@ -331,6 +331,41 @@ func TestPomodoroWaitingAndNext(t *testing.T) {
 	p.Stop()
 }
 
+// TestPomodoroPromptTimeoutEntersWaiting 验证确认弹窗超时（PromptTimeout）与
+// 用户选择暂停同样静默进入 waiting：不自动继续、不发通知，tempo pomo next
+// 可照常推进（README「确认弹窗的等待时限」承诺的行为）。
+func TestPomodoroPromptTimeoutEntersWaiting(t *testing.T) {
+	overrideAskConfirm(t, PromptTimeout)
+	m := NewManager(nil, nil, nil)
+	p := newPomodoroTracker("pomo", PomodoroOptions{
+		Work:       30 * time.Millisecond,
+		ShortBreak: time.Second,
+		LongBreak:  time.Second,
+		Cycle:      4,
+	}, m)
+	m.mu.Lock()
+	m.pomodoros["pomo"] = p
+	m.mu.Unlock()
+
+	waitForWaiting(t, p, 2*time.Second)
+	st := p.Status()
+	if !st.Waiting || st.Phase != phaseWork || st.Completed != 1 || st.Remaining != 0 {
+		t.Errorf("超时后状态 = %+v, want waiting=true phase=work completed=1 remaining=0", st)
+	}
+	waitForTasks(t, m, 0, time.Second)
+
+	if err := m.PomodoroNext("pomo"); err != nil {
+		t.Fatalf("PomodoroNext: %v", err)
+	}
+	st = p.Status()
+	if st.Waiting || st.Phase != phaseShortBreak || st.Completed != 1 {
+		t.Errorf("next 后状态 = %+v, want waiting=false phase=short_break completed=1", st)
+	}
+	waitForTasks(t, m, 1, time.Second)
+
+	p.Stop()
+}
+
 // TestPomodoroNextGuarded 验证推进的防御路径：未知名称报错；阶段任务运行中
 // Advance 为幂等 no-op。
 func TestPomodoroNextGuarded(t *testing.T) {

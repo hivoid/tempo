@@ -202,7 +202,7 @@ Phase transitions require confirmation: at the end of each phase a Continue / St
 
 When no interactive tool is available (headless environments), a notification is sent and the sequence auto-continues without interruption.
 
-Dialog waits are capped at 5 minutes: on Linux the dialog command is killed at the deadline and the platform fallback chain takes over; in Windows service mode the message box auto-closes after the same period.
+Dialog waits are capped at 5 minutes: when the deadline passes with no response, the dialog is closed and the sequence silently enters waiting — no notification is sent and nothing auto-continues; advance it later with `tempo pomo next` or terminate it with `tempo pomo stop`. On Linux the fallback chain only moves to the next tool when the current one fails to run (e.g. no display service), not when you simply do not respond; in Windows service mode the message box auto-closes at the deadline.
 
 `status` shows the current phase, completed work count, and remaining time; waiting state appends `(waiting)`. Omit the optional `NAME` to target the only active sequence; when nothing is running it prints `no active pomodoro`:
 

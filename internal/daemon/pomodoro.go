@@ -124,7 +124,8 @@ func (p *PomodoroTracker) removeCurrentTask() {
 // onStageComplete 是阶段任务正常结束的回调：从 Manager.tasks 移除已完成的阶段
 // 任务，按状态机计算下一阶段记入 pendingPhase，然后在独立 goroutine 中弹出
 // 三选确认框（F15、4.5 节）；继续→推进到下一阶段，停止→终止整个序列，
-// 暂停（或无法弹窗）→进入 waiting，等待 tempo pomo next 手动推进。
+// 暂停、确认超时未响应（或无法弹窗）→静默进入 waiting，等待 tempo pomo next
+// 手动推进，超时不发送通知、不自动继续。
 // finish_command 仍按 FinishOn 语义在阶段结束时调度，与确认流程互不影响。
 //
 // 本回调由 time.AfterFunc 触发，必须立即返回：确认弹窗最长阻塞 promptTimeout，
@@ -179,7 +180,7 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 	title, message, fallback := buildPromptText(from, next, p.opts)
 
 	// 确认弹窗可能阻塞至用户响应（上限 promptTimeout），放入独立 goroutine，
-	// 不阻塞 time.AfterFunc 的回调线程；三态结果分别驱动推进/停止/等待。
+	// 不阻塞 time.AfterFunc 的回调线程；各态结果分别驱动推进/停止/等待。
 	go func() {
 		result := confirm(p.mgr.logger, title, message, fallback)
 		switch result {
@@ -195,7 +196,8 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 			// 弹窗中选择停止：经 Manager 从注册表移除并终止整个序列。
 			p.requestStop()
 		default:
-			// PromptPause 及异常值：进入 waiting，等待 tempo pomo next 手动推进。
+			// PromptPause、PromptTimeout（弹窗超时未响应）及异常值：静默进入
+			// waiting，等待 tempo pomo next 手动推进；超时不发通知。
 			p.setWaiting()
 		}
 	}()

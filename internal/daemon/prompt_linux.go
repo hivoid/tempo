@@ -20,11 +20,14 @@ import (
 //     打到 stdout 并以退出码 1 退出），否则为停止；
 //   - notify-send 可用时仅发送通知、无法阻塞等待选择，发出后按继续处理
 //     （无交互式弹窗时自动继续优于停滞）；
-//   - 三者均不可用时记录日志并按继续处理。
+//   - 三者均不可用时记录日志并按继续处理；
+//   - 弹窗在 promptTimeout 内未得到响应：超时终止交互组件后直接返回
+//     PromptTimeout，不再重试下一个组件、也不发送通知，由调用方将序列置为
+//     waiting 等待手动推进（对不在场的用户换组件重弹没有意义）。
 //
 // message 用于交互式弹窗正文，fallbackMessage 用于纯通知回退时的通知正文，
-// 两者由调用方按场景区分。某个工具执行失败（如无法连接显示服务）时记录
-// 日志并继续尝试下一个工具。
+// 两者由调用方按场景区分。某个工具无法运行（如无法连接显示服务）时记录
+// 日志并继续尝试下一个工具；用户超时未响应不触发回退。
 func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage string) PromptResult {
 	if _, err := exec.LookPath("kdialog"); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), promptTimeout)
@@ -32,6 +35,11 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 		err := exec.CommandContext(ctx, "kdialog", "--title", title,
 			"--yes-label", "继续", "--no-label", "停止", "--cancel-label", "暂停",
 			"--yesnocancel", message).Run()
+		if errors.Is(err, context.DeadlineExceeded) {
+			// 用户在时限内未响应：静默进入 waiting，不重试下一个组件、不发通知。
+			logger.Info("确认弹窗超时未响应", "tool", "kdialog", "result", PromptTimeout)
+			return PromptTimeout
+		}
 		switch exitCode(err) {
 		case 0:
 			logger.Info("确认弹窗已选择", "tool", "kdialog", "result", PromptContinue)
@@ -53,6 +61,11 @@ func askConfirmPlatform(logger *slog.Logger, title, message, fallbackMessage str
 			"--title", title, "--text", message,
 			"--ok-label", "继续", "--cancel-label", "停止",
 			"--extra-button", "暂停").Output()
+		if errors.Is(err, context.DeadlineExceeded) {
+			// 用户在时限内未响应：静默进入 waiting，不重试下一个组件、不发通知。
+			logger.Info("确认弹窗超时未响应", "tool", "zenity", "result", PromptTimeout)
+			return PromptTimeout
+		}
 		switch {
 		case err == nil:
 			logger.Info("确认弹窗已选择", "tool", "zenity", "result", PromptContinue)
