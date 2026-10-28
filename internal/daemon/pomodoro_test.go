@@ -38,7 +38,7 @@ func waitForTasks(t *testing.T, m *Manager, want int, timeout time.Duration) {
 	t.Fatalf("等待任务数量 %d 超时，当前: %+v", want, m.List())
 }
 
-// waitForFile 轮询等待文件出现，用于观察异步执行的 finish_command 副作用。
+// waitForFile 轮询等待文件出现，用于观察异步执行的结束事件命令副作用。
 func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

@@ -73,7 +73,7 @@ func TestStartValidationErrors(t *testing.T) {
 func TestStartUsesRuleDuration(t *testing.T) {
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
-			"tea": {Duration: 10 * time.Minute, FinishCommand: "echo done"},
+			"tea": {Duration: 10 * time.Minute, FinishNotify: "echo done"},
 		},
 	}
 	m := NewManager(cfg, nil, nil)
@@ -206,7 +206,7 @@ func TestPomodoroStartRegistersStageTask(t *testing.T) {
 // TestPomodoroStartRejectsDuplicateNames 验证与已有任务或其他番茄钟重名时报错。
 func TestPomodoroStartRejectsDuplicateNames(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("tea", "", "10s", ""); err != nil {
+	if err := m.Start("tea", "", "10s", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Stop("tea") })

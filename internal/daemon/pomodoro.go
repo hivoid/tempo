@@ -113,7 +113,9 @@ func (p *PomodoroTracker) startStageLocked(phase string, d time.Duration) {
 	}
 	p.phase = phase
 
-	t := newTask(p.name, p.opts.Rule, "", d, p.onStageComplete)
+	// 阶段任务不经 Manager.onTaskFinish 处理结束动作（finishNotify/finishEvent
+	// 置空）：阶段收尾由 onStageComplete 驱动，finish_each 亦在其内调度。
+	t := newTask(p.name, p.opts.Rule, "", "", d, p.onStageComplete)
 	p.mgr.registerTask(t)
 
 	p.current = t
