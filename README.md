@@ -94,14 +94,15 @@ tempo version                                 Print the version
 tempo install-service                         Linux: print systemd unit install instructions; Windows: install the Service
 tempo uninstall-service                       Linux: print systemd unit uninstall instructions; Windows: remove the Service
 
-tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
+tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish-notify|-f CMD] [--finish|-F CMD]
 tempo list
 tempo pause NAME
 tempo resume NAME
 tempo stop NAME
 
 tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
-                 [--cycle|-c 4] [--rule|-r RULE] [--finish-on each|sequence]
+                 [--cycle|-c 4] [--rule|-r RULE] [--finish-each|-e CMD]
+                 [--finish-sequence|-S CMD]
 tempo pomo status [NAME]                      appends (waiting) while waiting for confirmation
 tempo pomo next NAME                          advance the pending next phase
 tempo pomo stop [NAME]
@@ -114,10 +115,12 @@ tempo pomo stop [NAME]
 | `--name` / `-n`                                    | Task name, used for later management; required                                                             |
 | `-t`                                               | Duration in Go duration format, e.g. `25m`, `1h30m`                                                        |
 | `--rule` / `-r`                                    | Reference a preset rule from the config file                                                               |
-| `--finish` / `-f`                                  | Custom command to run on completion; overrides the rule's `finish_command`                                 |
+| `--finish-notify` / `-f`                           | Custom notification command on completion; overrides the rule's `finish_notify`; empty uses the platform default |
+| `--finish` / `-F`                                  | Finish-event command run once when the timer completes; empty (default) runs nothing                       |
 | `--work` / `-w`, `--short` / `-s`, `--long` / `-l` | Pomodoro phase durations                                                                                   |
 | `--cycle` / `-c`                                   | Number of work phases before a long break; default 4                                                       |
-| `--finish-on`                                      | When the Pomodoro custom command runs: `each` (every phase) or `sequence` (whole sequence); default `each` |
+| `--finish-each` / `-e`                             | Finish-event command run at the end of every Pomodoro phase; empty (default) runs nothing                  |
+| `--finish-sequence` / `-S`                         | Finish-event command run once when the Pomodoro sequence is stopped; empty (default) runs nothing          |
 
 ## Configuration
 
@@ -146,18 +149,22 @@ cycle = 4
 
 [rules.tea] # timer rule: has duration, for `tempo start`
 duration = "10m"
+# finish_notify = "..." # custom finish notification command; empty uses the platform default
+# finish = "..."        # finish-event command run once when the timer completes; empty or false runs nothing
 
 [rules.deep] # Pomodoro rule: has work/short_break/long_break/cycle, for `tempo pomo start`
 work = "50m"
 short_break = "10m"
 long_break = "30m"
 cycle = 2
-finish_command = "notify-send 'Pomodoro phase finished'"
-finish_on = "each"
+finish_each = "notify-send 'Pomodoro phase finished'" # finish event at every phase end; empty or false runs nothing
+finish_sequence = "backup.sh" # finish event run once when the sequence is stopped; empty or false runs nothing
 ```
 
-- When `finish_command` is empty, the platform default notification is used.
-- `finish_on` controls whether the custom command runs on every phase (`each`) or only when the whole sequence ends (`sequence`) in Pomodoro mode; default `each`.
+- Timer rules customize the finish notification with `finish_notify` (empty: platform default notification) and may add a finish event with `finish` — a command run once when the timer completes.
+- Pomodoro rules instead have two independently configurable finish events, distinct from notifications and without a default action: `finish_each` runs at the end of every phase and `finish_sequence` runs once when the sequence is stopped; an empty value or `false` runs nothing.
+- The old `finish_on` option and `finish_command` key have been removed; a config still containing them (or finish-event keys in the wrong rule kind) is rejected with a migration hint.
+- CLI flags override rule presets: `--finish-notify/-f` and `--finish/-F` for `tempo start`, `--finish-each/-e` and `--finish-sequence/-S` for `tempo pomo start`.
 - Rules are either timer rules (with `duration`, referenced by `tempo start --rule`) or Pomodoro rules (with any of `work`/`short_break`/`long_break`/`cycle`, referenced by `tempo pomo start --rule`); the two kinds are mutually exclusive and share a single namespace. Referencing an undefined rule or a rule of the wrong kind returns an error.
 - Unset fields of a Pomodoro rule fall back to the `[pomodoro]` section, then to built-in defaults; explicit CLI flags take precedence over both.
 - `log_path` sets the daemon log file path; empty or omitted uses the platform default (see [Logging](#logging)).

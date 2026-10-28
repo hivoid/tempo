@@ -21,8 +21,7 @@ func TestLoadValidConfig(t *testing.T) {
 	path := writeConfig(t, `
 [rules.pomodoro]
 duration = "25m"
-finish_command = "notify-send -t 30000 '番茄钟结束'"
-finish_on = "sequence"
+finish_notify = "notify-send -t 30000 '番茄钟结束'"
 
 [rules.tea]
 duration = "10m"
@@ -45,11 +44,8 @@ cycle = 3
 	if pomoRule.Duration != 25*time.Minute {
 		t.Errorf("pomodoro.Duration = %v, want 25m", pomoRule.Duration)
 	}
-	if pomoRule.FinishCommand != "notify-send -t 30000 '番茄钟结束'" {
-		t.Errorf("pomodoro.FinishCommand = %q", pomoRule.FinishCommand)
-	}
-	if pomoRule.FinishOn != FinishOnSequence {
-		t.Errorf("pomodoro.FinishOn = %q, want %q", pomoRule.FinishOn, FinishOnSequence)
+	if pomoRule.FinishNotify != "notify-send -t 30000 '番茄钟结束'" {
+		t.Errorf("pomodoro.FinishNotify = %q", pomoRule.FinishNotify)
 	}
 
 	teaRule, ok := cfg.Rules["tea"]
@@ -59,8 +55,8 @@ cycle = 3
 	if teaRule.Duration != 10*time.Minute {
 		t.Errorf("tea.Duration = %v, want 10m", teaRule.Duration)
 	}
-	if teaRule.FinishOn != FinishOnEach {
-		t.Errorf("缺省 finish_on = %q, want %q", teaRule.FinishOn, FinishOnEach)
+	if teaRule.Finish != "" || teaRule.FinishEach != "" || teaRule.FinishSequence != "" {
+		t.Errorf("未配置的结束事件应为空: %+v", teaRule)
 	}
 
 	// [pomodoro] 段保留原始字符串，经 PomodoroDefaults 解析为时长。
@@ -103,14 +99,15 @@ duration = "abc"
 	}
 }
 
-func TestLoadInvalidFinishOn(t *testing.T) {
+func TestLoadRemovedFinishOn(t *testing.T) {
+	// finish_on 已被分别配置的结束事件取代，出现即报错并提示迁移。
 	path := writeConfig(t, `
 [rules.bad]
 duration = "10m"
-finish_on = "sometimes"
+finish_on = "each"
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_on") {
-		t.Errorf("非法 finish_on 应报错，得到: %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_on 已移除") {
+		t.Errorf("已移除的 finish_on 应报错提示迁移，得到: %v", err)
 	}
 }
 
@@ -163,8 +160,8 @@ work = "50m"
 short_break = "10m"
 long_break = "30m"
 cycle = 2
-finish_command = "echo done"
-finish_on = "each"
+finish_each = "echo stage"
+finish_sequence = "echo done"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -184,8 +181,112 @@ finish_on = "each"
 	if rule.Duration != 0 {
 		t.Errorf("番茄钟规则不应设置 Duration，得到 %v", rule.Duration)
 	}
-	if rule.FinishCommand != "echo done" || rule.FinishOn != FinishOnEach {
-		t.Errorf("deep finish 字段 = (%q, %q)", rule.FinishCommand, rule.FinishOn)
+	if rule.FinishEach != "echo stage" || rule.FinishSequence != "echo done" {
+		t.Errorf("deep 结束事件字段 = (%q, %q)", rule.FinishEach, rule.FinishSequence)
+	}
+}
+
+func TestLoadTimerFinishEvent(t *testing.T) {
+	// 计时规则的 finish 为结束事件：命令字符串生效，false 显式禁用。
+	path := writeConfig(t, `
+[rules.a]
+duration = "10m"
+finish = "echo hi"
+
+[rules.b]
+duration = "10m"
+finish = false
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Rules["a"].Finish; got != "echo hi" {
+		t.Errorf("a.Finish = %q, want echo hi", got)
+	}
+	if got := cfg.Rules["b"].Finish; got != "" {
+		t.Errorf("b.Finish = %q, want 空（false 显式禁用）", got)
+	}
+}
+
+func TestLoadTimerFinishCommandRenamed(t *testing.T) {
+	// 计时规则的 finish_command 已更名为 finish_notify，出现即报错提示迁移。
+	path := writeConfig(t, `
+[rules.bad]
+duration = "10m"
+finish_command = "echo hi"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_notify") {
+		t.Errorf("计时规则的 finish_command 应报错提示改名，得到: %v", err)
+	}
+}
+
+func TestLoadFinishEventTrueInvalid(t *testing.T) {
+	// true 无命令可执行，属配置错误。
+	path := writeConfig(t, `
+[rules.bad]
+duration = "10m"
+finish = true
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish = true") {
+		t.Errorf("finish = true 应报错，得到: %v", err)
+	}
+}
+
+func TestLoadFinishEventInvalidType(t *testing.T) {
+	// 结束事件仅接受命令字符串或布尔，其余类型报错。
+	path := writeConfig(t, `
+[rules.bad]
+duration = "10m"
+finish = 42
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish") {
+		t.Errorf("非字符串/布尔的结束事件应报错，得到: %v", err)
+	}
+}
+
+func TestLoadTimerRuleRejectsFinishEvents(t *testing.T) {
+	// finish_each/finish_sequence 仅用于番茄钟规则，计时规则中出现即报错。
+	path := writeConfig(t, `
+[rules.bad]
+duration = "10m"
+finish_each = "echo hi"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "计时规则不支持") {
+		t.Errorf("计时规则中的番茄钟结束事件应报错，得到: %v", err)
+	}
+}
+
+func TestLoadPomodoroRuleRejectsFinishCommand(t *testing.T) {
+	// 番茄钟规则的 finish_command 已被结束事件取代，出现即报错提示迁移。
+	path := writeConfig(t, `
+[rules.deep]
+work = "50m"
+finish_command = "echo done"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_each") {
+		t.Errorf("番茄钟规则的 finish_command 应报错提示迁移，得到: %v", err)
+	}
+}
+
+func TestLoadPomodoroRuleRejectsNotifyAndTimerEvent(t *testing.T) {
+	// 番茄钟不提供通知配置（finish_notify）与计时结束事件（finish），出现即报错。
+	path := writeConfig(t, `
+[rules.deep]
+work = "50m"
+finish_notify = "echo hi"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_notify/finish") {
+		t.Errorf("番茄钟规则的 finish_notify 应报错，得到: %v", err)
+	}
+
+	path = writeConfig(t, `
+[rules.deep]
+work = "50m"
+finish = "echo hi"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_notify/finish") {
+		t.Errorf("番茄钟规则的 finish 应报错，得到: %v", err)
 	}
 }
 

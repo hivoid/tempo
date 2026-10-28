@@ -108,8 +108,8 @@ func TestPomodoroFillDefaults(t *testing.T) {
 		p.opts.LongBreak != defLong || p.opts.Cycle != defCycle {
 		t.Errorf("空参数应回退 PRD 默认值: %+v", p.opts)
 	}
-	if p.opts.FinishOn != config.FinishOnEach {
-		t.Errorf("FinishOn 缺省应为 %q, got %q", config.FinishOnEach, p.opts.FinishOn)
+	if p.opts.FinishEach != "" || p.opts.FinishSequence != "" {
+		t.Errorf("空参数的结束事件应为空（不执行）: each=%q sequence=%q", p.opts.FinishEach, p.opts.FinishSequence)
 	}
 	p.Stop()
 
@@ -221,14 +221,14 @@ func TestPomodoroPauseKeepsProgress(t *testing.T) {
 	p.Stop()
 }
 
-// TestPomodoroEachFinishCommandRunsPerStage 验证 each 模式下每阶段结束执行
-// 规则的 finish_command。
-func TestPomodoroEachFinishCommandRunsPerStage(t *testing.T) {
+// TestPomodoroEachFinishEventRunsPerStage 验证每阶段结束事件（finish_each）在
+// 每个阶段结束时执行：命令取自规则档位，CLI 未传时经 fillDefaults 补全。
+func TestPomodoroEachFinishEventRunsPerStage(t *testing.T) {
 	overrideAskConfirm(t, PromptPause)
 	flagFile := filepath.Join(t.TempDir(), "stage-done")
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
-			"pomo": {Duration: time.Second, FinishCommand: "touch " + flagFile},
+			"pomo": {Kind: config.RulePomodoro, FinishEach: "touch " + flagFile},
 		},
 	}
 	m := NewManager(cfg, nil, nil)
@@ -238,30 +238,28 @@ func TestPomodoroEachFinishCommandRunsPerStage(t *testing.T) {
 		ShortBreak: time.Second,
 		LongBreak:  time.Second,
 		Cycle:      4,
-		FinishOn:   config.FinishOnEach,
 	}, m)
 
 	waitForFile(t, flagFile, 2*time.Second)
 	p.Stop()
 }
 
-// TestPomodoroSequenceFinishCommandOnStop 验证 sequence 模式仅在用户停止序列时
-// 执行一次 finish_command，且停止后不残留阶段任务。
-func TestPomodoroSequenceFinishCommandOnStop(t *testing.T) {
+// TestPomodoroSequenceFinishEventOnStop 验证整个序列结束事件（finish_sequence）
+// 仅在序列终止时执行一次，且停止后不残留阶段任务。
+func TestPomodoroSequenceFinishEventOnStop(t *testing.T) {
 	flagFile := filepath.Join(t.TempDir(), "sequence-done")
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
-			"pomo": {Duration: time.Second, FinishCommand: "touch " + flagFile},
+			"pomo": {Kind: config.RulePomodoro, FinishSequence: "touch " + flagFile},
 		},
 	}
 	m := NewManager(cfg, nil, nil)
 	p := newPomodoroTracker("pomo", PomodoroOptions{
 		Rule:       "pomo",
-		Work:       time.Hour, // 阶段远未结束，命令只能来自 Stop
+		Work:       time.Hour, // 阶段远未结束，事件只能来自 Stop
 		ShortBreak: time.Second,
 		LongBreak:  time.Second,
 		Cycle:      4,
-		FinishOn:   config.FinishOnSequence,
 	}, m)
 
 	p.Stop()
@@ -271,13 +269,36 @@ func TestPomodoroSequenceFinishCommandOnStop(t *testing.T) {
 	}
 }
 
-// TestPomodoroFinishCommandFailureNotBlocking 验证 finish_command 失败仅记日志，
-// 不阻塞阶段推进（F12）；同时覆盖 FinishOn 缺省为 each。
-func TestPomodoroFinishCommandFailureNotBlocking(t *testing.T) {
+// TestPomodoroFinishEventsFromOptions 验证 CLI 传入的结束事件优先于规则配置：
+// opts 的 finish_sequence 生效，规则的对应配置被覆盖。
+func TestPomodoroFinishEventsFromOptions(t *testing.T) {
+	flagFile := filepath.Join(t.TempDir(), "cli-sequence-done")
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"pomo": {Kind: config.RulePomodoro, FinishSequence: "exit 1"},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+	p := newPomodoroTracker("pomo", PomodoroOptions{
+		Rule:           "pomo",
+		Work:           time.Hour,
+		ShortBreak:     time.Second,
+		LongBreak:      time.Second,
+		Cycle:          4,
+		FinishSequence: "touch " + flagFile,
+	}, m)
+
+	p.Stop()
+	waitForFile(t, flagFile, 2*time.Second)
+}
+
+// TestPomodoroFinishEventFailureNotBlocking 验证结束事件命令失败仅记日志，
+// 不阻塞阶段推进（F12）。
+func TestPomodoroFinishEventFailureNotBlocking(t *testing.T) {
 	overrideAskConfirm(t, PromptContinue)
 	cfg := &config.Config{
 		Rules: map[string]config.Rule{
-			"pomo": {FinishCommand: "exit 3"},
+			"pomo": {Kind: config.RulePomodoro, FinishEach: "exit 3"},
 		},
 	}
 	m := NewManager(cfg, nil, nil)

@@ -30,13 +30,14 @@ const usage = `tempo — CLI 计时器
   tempo version                                 打印版本号
   tempo install-service                         安装系统服务（Windows 实际安装；Linux 打印手动安装提示）
   tempo uninstall-service                       卸载系统服务（Windows 实际卸载；Linux 打印手动卸载提示）
-  tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
+  tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish-notify|-f CMD] [--finish|-F CMD]
   tempo list                                    列出所有活动任务
   tempo pause NAME
   tempo resume NAME
   tempo stop NAME
   tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
-                    [--cycle|-c 4] [--rule|-r RULE] [--finish-on each|sequence]
+                    [--cycle|-c 4] [--rule|-r RULE] [--finish-each|-e CMD]
+                    [--finish-sequence|-S CMD]
   tempo pomo status [NAME]                      查看当前阶段与周期进度
   tempo pomo next NAME                          推进等待确认的下一阶段
   tempo pomo stop [NAME]                        终止番茄钟序列
@@ -172,17 +173,20 @@ func runDaemon(configPath string, stop <-chan struct{}) error {
 	return daemon.ServeWithShutdown(mgr, stop)
 }
 
-// runStart 启动计时任务。
+// runStart 启动计时任务。--finish-notify 定制结束提醒（空回退规则与平台默认
+// 通知）；--finish 为计时结束事件命令（空不执行）。
 func runStart(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ExitOnError)
-	var name, rule, duration, finish string
+	var name, rule, duration, finishNotify, finishEvent string
 	fs.StringVar(&name, "name", "", "任务名称")
 	fs.StringVar(&name, "n", "", "任务名称（简写）")
 	fs.StringVar(&rule, "rule", "", "预置规则名称")
 	fs.StringVar(&rule, "r", "", "预置规则名称（简写）")
 	fs.StringVar(&duration, "t", "", "计时时长，如 25m")
-	fs.StringVar(&finish, "finish", "", "自定义结束命令")
-	fs.StringVar(&finish, "f", "", "自定义结束命令（简写）")
+	fs.StringVar(&finishNotify, "finish-notify", "", "自定义结束提醒命令")
+	fs.StringVar(&finishNotify, "f", "", "自定义结束提醒命令（简写）")
+	fs.StringVar(&finishEvent, "finish", "", "计时结束事件命令，缺省不执行")
+	fs.StringVar(&finishEvent, "F", "", "计时结束事件命令（简写）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -194,9 +198,10 @@ func runStart(args []string) error {
 		Action: protocol.ActionStart,
 		Name:   name,
 		Args: map[string]string{
-			"rule":     rule,
-			"duration": duration,
-			"finish":   finish,
+			"rule":          rule,
+			"duration":      duration,
+			"finish_notify": finishNotify,
+			"finish":        finishEvent,
 		},
 	})
 }
@@ -267,16 +272,20 @@ func handlePomodoro(args []string) error {
 	}
 }
 
-// runPomodoroStart 启动番茄钟序列。时长与 cycle 留空表示未设置，
-// 由 daemon 按 [pomodoro] 配置与内置默认值补全（PRD F17）。
+// runPomodoroStart 启动番茄钟序列。时长与 cycle 留空表示未设置，由 daemon 按
+// [pomodoro] 配置与内置默认值补全（PRD F17）；结束事件命令留空表示不执行，
+// CLI 未传时回退规则配置。
 func runPomodoroStart(args []string) error {
 	fs := flag.NewFlagSet("pomo start", flag.ExitOnError)
-	var name, rule, finishOn, work, short, long, cycle string
+	var name, rule, finishEach, finishSequence, work, short, long, cycle string
 	fs.StringVar(&name, "name", "", "番茄钟名称")
 	fs.StringVar(&name, "n", "", "番茄钟名称（简写）")
 	fs.StringVar(&rule, "rule", "", "预置规则名称")
 	fs.StringVar(&rule, "r", "", "预置规则名称（简写）")
-	fs.StringVar(&finishOn, "finish-on", "", "自定义命令执行时机: each | sequence（缺省 each）")
+	fs.StringVar(&finishEach, "finish-each", "", "每阶段结束事件命令，缺省不执行")
+	fs.StringVar(&finishEach, "e", "", "每阶段结束事件命令（简写）")
+	fs.StringVar(&finishSequence, "finish-sequence", "", "整个序列结束事件命令，缺省不执行")
+	fs.StringVar(&finishSequence, "S", "", "整个序列结束事件命令（简写）")
 	fs.StringVar(&work, "work", "", "专注时长，如 25m")
 	fs.StringVar(&work, "w", "", "专注时长（简写）")
 	fs.StringVar(&short, "short", "", "短休时长，如 5m")
@@ -296,12 +305,13 @@ func runPomodoroStart(args []string) error {
 		Action: protocol.ActionPomodoroStart,
 		Name:   name,
 		Args: map[string]string{
-			"work":      work,
-			"short":     short,
-			"long":      long,
-			"cycle":     cycle,
-			"rule":      rule,
-			"finish_on": finishOn,
+			"work":            work,
+			"short":           short,
+			"long":            long,
+			"cycle":           cycle,
+			"rule":            rule,
+			"finish_each":     finishEach,
+			"finish_sequence": finishSequence,
 		},
 	})
 }

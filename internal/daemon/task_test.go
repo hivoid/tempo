@@ -20,7 +20,7 @@ func TestTaskStateString(t *testing.T) {
 }
 
 func TestNewTaskInitial(t *testing.T) {
-	task := newTask("tea", "rule-a", "", time.Minute, func(*Task) {})
+	task := newTask("tea", "rule-a", "", "", time.Minute, func(*Task) {})
 	if got := task.State(); got != StateRunning {
 		t.Errorf("初始状态 = %v, want running", got)
 	}
@@ -31,7 +31,7 @@ func TestNewTaskInitial(t *testing.T) {
 
 func TestTaskFinishTriggersCallback(t *testing.T) {
 	done := make(chan *Task, 1)
-	task := newTask("tea", "", "", 30*time.Millisecond, func(tk *Task) { done <- tk })
+	task := newTask("tea", "", "", "", 30*time.Millisecond, func(tk *Task) { done <- tk })
 	select {
 	case got := <-done:
 		if got != task {
@@ -47,7 +47,7 @@ func TestTaskFinishTriggersCallback(t *testing.T) {
 
 func TestTaskPauseHoldsRemainingAndBlocksFinish(t *testing.T) {
 	var fired atomic.Int32
-	task := newTask("tea", "", "", 200*time.Millisecond, func(*Task) { fired.Add(1) })
+	task := newTask("tea", "", "", "", 200*time.Millisecond, func(*Task) { fired.Add(1) })
 
 	time.Sleep(50 * time.Millisecond)
 	task.Pause()
@@ -88,7 +88,7 @@ func TestTaskPauseHoldsRemainingAndBlocksFinish(t *testing.T) {
 
 func TestTaskStopPreventsCallback(t *testing.T) {
 	var fired atomic.Int32
-	task := newTask("tea", "", "", 50*time.Millisecond, func(*Task) { fired.Add(1) })
+	task := newTask("tea", "", "", "", 50*time.Millisecond, func(*Task) { fired.Add(1) })
 	task.Stop()
 	time.Sleep(200 * time.Millisecond)
 	if n := fired.Load(); n != 0 {
@@ -101,7 +101,7 @@ func TestTaskStopPreventsCallback(t *testing.T) {
 
 func TestTaskResumeWithoutPauseIsNoop(t *testing.T) {
 	var fired atomic.Int32
-	task := newTask("tea", "", "", time.Hour, func(*Task) { fired.Add(1) })
+	task := newTask("tea", "", "", "", time.Hour, func(*Task) { fired.Add(1) })
 	task.Resume()
 	if got := task.State(); got != StateRunning {
 		t.Errorf("对运行中任务 Resume 后状态 = %v, want running", got)

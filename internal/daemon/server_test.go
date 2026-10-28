@@ -93,7 +93,7 @@ func TestDispatchLifecycle(t *testing.T) {
 	resp := dispatch(m, protocol.Request{
 		Action: protocol.ActionStart,
 		Name:   "tea",
-		Args:   map[string]string{"duration": "10s", "rule": "", "finish": ""},
+		Args:   map[string]string{"duration": "10s", "rule": "", "finish_notify": "", "finish": ""},
 	})
 	if !resp.OK {
 		t.Fatalf("start 失败: %s", resp.Error)
@@ -154,7 +154,7 @@ func TestDispatchPomodoroLifecycle(t *testing.T) {
 		Name:   "focus",
 		Args: map[string]string{
 			"work": "10s", "short": "5s", "long": "15s", "cycle": "2",
-			"rule": "", "finish_on": "sequence",
+			"rule": "", "finish_each": "", "finish_sequence": "",
 		},
 	}); !resp.OK {
 		t.Fatalf("pomodoro start 失败: %s", resp.Error)

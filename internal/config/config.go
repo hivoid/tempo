@@ -11,38 +11,35 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// finish_on 的合法取值。
-const (
-	// FinishOnEach 表示自定义结束命令在每个阶段结束时执行。
-	FinishOnEach = "each"
-	// FinishOnSequence 表示自定义结束命令在整个序列结束时执行。
-	FinishOnSequence = "sequence"
-)
-
 // RuleKind 区分预置规则的类型，按规则中出现的是 duration 还是番茄钟字段判别，
 // 两类字段互斥。
 type RuleKind int
 
 const (
-	// RuleTimer 计时规则：提供 duration 与可选 finish_command，供 tempo start 使用。
+	// RuleTimer 计时规则：提供 duration、可选 finish_notify（结束提醒命令）与
+	// finish（结束事件命令），供 tempo start 使用。
 	RuleTimer RuleKind = iota
 	// RulePomodoro 番茄钟规则：提供 work/short_break/long_break/cycle 时长档位
-	// 与可选 finish_command/finish_on，未填字段回退全局默认，供 tempo pomo start
-	// 的 -r 引用。
+	// 与可选 finish_each/finish_sequence 结束事件，未填字段回退全局默认，
+	// 供 tempo pomo start 的 -r 引用。
 	RulePomodoro
 )
 
 // Rule 是一条预置规则，对应配置中的 [rules.NAME] 段。计时与番茄钟规则共用同一
-// 命名空间与 -r 标志，按 Kind 区分、字段二选一。
+// 命名空间与 -r 标志，按 Kind 区分、字段二选一：通知（finish_notify）定制计时
+// 结束提醒、有平台默认动作；结束事件（finish/finish_each/finish_sequence）没有
+// 默认动作，留空或 false 一律不执行。
 type Rule struct {
-	Kind          RuleKind      // 规则类型
-	Duration      time.Duration // RuleTimer：计时时长
-	Work          time.Duration // RulePomodoro：专注时长，0 表示未设置
-	ShortBreak    time.Duration // RulePomodoro：短休时长，0 表示未设置
-	LongBreak     time.Duration // RulePomodoro：长休时长，0 表示未设置
-	Cycle         int           // RulePomodoro：长休前的专注次数，0 表示未设置
-	FinishCommand string        // 自定义结束命令，为空时使用平台默认提醒
-	FinishOn      string        // FinishOnEach | FinishOnSequence，缺省为 FinishOnEach
+	Kind           RuleKind      // 规则类型
+	Duration       time.Duration // RuleTimer：计时时长
+	Work           time.Duration // RulePomodoro：专注时长，0 表示未设置
+	ShortBreak     time.Duration // RulePomodoro：短休时长，0 表示未设置
+	LongBreak      time.Duration // RulePomodoro：长休时长，0 表示未设置
+	Cycle          int           // RulePomodoro：长休前的专注次数，0 表示未设置
+	FinishNotify   string        // RuleTimer：计时结束提醒命令，空时使用平台默认通知
+	Finish         string        // RuleTimer：计时结束事件命令，空 = 不执行
+	FinishEach     string        // RulePomodoro：每阶段结束事件命令，空 = 不执行
+	FinishSequence string        // RulePomodoro：整个序列结束事件命令，空 = 不执行
 }
 
 // PomodoroConfig 是 [pomodoro] 段的原始 TOML 表示；时长保持字符串，
@@ -91,14 +88,21 @@ func parseDurationOr(raw string, fallback time.Duration) time.Duration {
 
 // rawRule 用于 TOML 反序列化；时长保持字符串以便统一校验解析错误。规则类型按
 // 字段判别：出现任一番茄钟字段即为番茄钟规则，出现 duration 即为计时规则。
+// 结束事件（finish/finish_each/finish_sequence）的值可为命令字符串或布尔
+// false（显式禁用），故以 interface{} 承接后经 parseFinishEvent 归一化；
+// finish_command 与 finish_on 为已移除的旧键，出现即报错提示迁移。
 type rawRule struct {
-	Duration      string `toml:"duration"`
-	Work          string `toml:"work"`
-	ShortBreak    string `toml:"short_break"`
-	LongBreak     string `toml:"long_break"`
-	Cycle         int    `toml:"cycle"`
-	FinishCommand string `toml:"finish_command"`
-	FinishOn      string `toml:"finish_on"`
+	Duration       string      `toml:"duration"`
+	Work           string      `toml:"work"`
+	ShortBreak     string      `toml:"short_break"`
+	LongBreak      string      `toml:"long_break"`
+	Cycle          int         `toml:"cycle"`
+	FinishNotify   string      `toml:"finish_notify"`
+	Finish         interface{} `toml:"finish"`
+	FinishEach     interface{} `toml:"finish_each"`
+	FinishSequence interface{} `toml:"finish_sequence"`
+	FinishCommand  string      `toml:"finish_command"` // 旧键：出现即报错提示迁移
+	FinishOn       string      `toml:"finish_on"`      // 旧键：出现即报错提示迁移
 }
 
 type rawConfig struct {
@@ -119,7 +123,7 @@ func Load(path string) (*Config, error) {
 	return raw.toConfig()
 }
 
-// toConfig 将 TOML 中间结构转换为 Config，并校验规则类型、时长与 finish_on 取值。
+// toConfig 将 TOML 中间结构转换为 Config，并校验规则类型、时长与结束事件取值。
 // 全局 [pomodoro] 段维持宽松语义（非法值回退内置默认）；规则内的字段属显式
 // 预置配置，非法即报错，尽早暴露错误。
 func (r rawConfig) toConfig() (*Config, error) {
@@ -143,6 +147,11 @@ func (r rawConfig) toConfig() (*Config, error) {
 // long_break/cycle）即为番茄钟规则，出现 duration 即为计时规则；两类字段互斥
 // 且至少配置其一。
 func (rr rawRule) toRule(name string) (Rule, error) {
+	// finish_on 已被分别配置的结束事件取代，出现即报错提示迁移，避免旧配置被
+	// 静默忽略后行为悄然改变。
+	if rr.FinishOn != "" {
+		return Rule{}, fmt.Errorf("规则 %s: finish_on 已移除，结束事件请分别用 finish（计时）/ finish_each、finish_sequence（番茄钟）配置", name)
+	}
 	hasTimer := rr.Duration != ""
 	hasPomodoro := rr.Work != "" || rr.ShortBreak != "" || rr.LongBreak != "" || rr.Cycle != 0
 	switch {
@@ -157,27 +166,44 @@ func (rr rawRule) toRule(name string) (Rule, error) {
 	}
 }
 
-// toTimerRule 构造计时规则：duration 必填且须为正时长。
+// toTimerRule 构造计时规则：duration 必填且须为正时长；finish_notify 为计时结束
+// 的提醒命令（空时使用平台默认通知），finish 为计时结束事件（空或 false 不执行）。
+// 仅番茄钟可用的结束事件键与旧键 finish_command 出现即报错提示迁移。
 func (rr rawRule) toTimerRule(name string) (Rule, error) {
+	if rr.FinishEach != nil || rr.FinishSequence != nil {
+		return Rule{}, fmt.Errorf("规则 %s: 计时规则不支持 finish_each/finish_sequence，请改用 finish 配置计时结束事件", name)
+	}
+	if rr.FinishCommand != "" {
+		return Rule{}, fmt.Errorf("规则 %s: finish_command 已更名为 finish_notify，请改名后使用", name)
+	}
 	duration, err := parseRuleDuration(name, "duration", rr.Duration)
 	if err != nil {
 		return Rule{}, err
 	}
-	finishOn, err := normalizeFinishOn(name, rr.FinishOn)
+	finish, err := parseFinishEvent(name, "finish", rr.Finish)
 	if err != nil {
 		return Rule{}, err
 	}
 	return Rule{
-		Kind:          RuleTimer,
-		Duration:      duration,
-		FinishCommand: rr.FinishCommand,
-		FinishOn:      finishOn,
+		Kind:         RuleTimer,
+		Duration:     duration,
+		FinishNotify: rr.FinishNotify,
+		Finish:       finish,
 	}, nil
 }
 
 // toPomodoroRule 构造番茄钟规则：时长字段可留空表示未设置（由全局默认与内置
-// 默认值补全），显式给出时须为正；cycle 不得为负。
+// 默认值补全），显式给出时须为正；cycle 不得为负。结束事件 finish_each 在每个
+// 阶段结束时执行、finish_sequence 在整个序列终止时执行一次，空或 false 均不
+// 执行；番茄钟的阶段确认弹窗即其通知机制，不提供 finish_notify，旧键
+// finish_command 与计时专用的 finish/finish_notify 出现即报错提示迁移。
 func (rr rawRule) toPomodoroRule(name string) (Rule, error) {
+	if rr.FinishCommand != "" {
+		return Rule{}, fmt.Errorf("规则 %s: 番茄钟规则不支持 finish_command，请改用 finish_each 与 finish_sequence 分别配置结束事件", name)
+	}
+	if rr.FinishNotify != "" || rr.Finish != nil {
+		return Rule{}, fmt.Errorf("规则 %s: 番茄钟规则不支持 finish_notify/finish，请改用 finish_each 与 finish_sequence 分别配置结束事件", name)
+	}
 	work, err := parseRuleDuration(name, "work", rr.Work)
 	if err != nil {
 		return Rule{}, err
@@ -193,18 +219,22 @@ func (rr rawRule) toPomodoroRule(name string) (Rule, error) {
 	if rr.Cycle < 0 {
 		return Rule{}, fmt.Errorf("规则 %s: cycle 不能为负，得到 %d", name, rr.Cycle)
 	}
-	finishOn, err := normalizeFinishOn(name, rr.FinishOn)
+	finishEach, err := parseFinishEvent(name, "finish_each", rr.FinishEach)
+	if err != nil {
+		return Rule{}, err
+	}
+	finishSequence, err := parseFinishEvent(name, "finish_sequence", rr.FinishSequence)
 	if err != nil {
 		return Rule{}, err
 	}
 	return Rule{
-		Kind:          RulePomodoro,
-		Work:          work,
-		ShortBreak:    shortBreak,
-		LongBreak:     longBreak,
-		Cycle:         rr.Cycle,
-		FinishCommand: rr.FinishCommand,
-		FinishOn:      finishOn,
+		Kind:           RulePomodoro,
+		Work:           work,
+		ShortBreak:     shortBreak,
+		LongBreak:      longBreak,
+		Cycle:          rr.Cycle,
+		FinishEach:     finishEach,
+		FinishSequence: finishSequence,
 	}, nil
 }
 
@@ -224,14 +254,22 @@ func parseRuleDuration(rule, key, raw string) (time.Duration, error) {
 	return d, nil
 }
 
-// normalizeFinishOn 校验并归一化 finish_on：空值按 FinishOnEach 处理。
-func normalizeFinishOn(name, raw string) (string, error) {
-	if raw == "" {
-		return FinishOnEach, nil
+// parseFinishEvent 归一化结束事件配置（finish / finish_each / finish_sequence）：
+// 字符串按命令处理（空串表示不执行），布尔 false 表示显式禁用，true 无命令可
+// 执行属配置错误，其余类型报错。结束事件不同于通知：没有默认动作，未配置即
+// 不执行。
+func parseFinishEvent(rule, key string, v interface{}) (string, error) {
+	switch val := v.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return val, nil
+	case bool:
+		if !val {
+			return "", nil
+		}
+		return "", fmt.Errorf("规则 %s: %s = true 无意义，应为命令字符串或 false", rule, key)
+	default:
+		return "", fmt.Errorf("规则 %s: %s 应为命令字符串或 false，得到 %T", rule, key, v)
 	}
-	if raw != FinishOnEach && raw != FinishOnSequence {
-		return "", fmt.Errorf("规则 %s: 非法的 finish_on %q（允许 %q 或 %q）",
-			name, raw, FinishOnEach, FinishOnSequence)
-	}
-	return raw, nil
 }

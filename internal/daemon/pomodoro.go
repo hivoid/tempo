@@ -15,6 +15,12 @@ const (
 	phaseLongBreak  = "long_break"
 )
 
+// 结束事件名称，用于日志 event 字段：each 每阶段结束、sequence 整个序列结束。
+const (
+	finishEventEach     = "each"
+	finishEventSequence = "sequence"
+)
+
 // PomodoroTracker 驱动一个番茄钟序列：按各阶段时长在专注/短休/长休间自动切换
 // （PRD F15–F21、4.5 节状态机）。序列以 name 标识，当前阶段任务与序列同名注册在
 // Manager 的任务表中，任务级 pause/resume/stop 因此可直接作用于当前阶段（F20）。
@@ -48,8 +54,7 @@ func newPomodoroTracker(name string, opts PomodoroOptions, mgr *Manager) *Pomodo
 
 // fillDefaults 补全序列参数，回退优先级：显式传入（CLI）> 规则档位 > 全局
 // [pomodoro] 配置 > PRD 默认值（后两级由 Config.PomodoroDefaults 统一解析与
-// 兜底）；FinishOn 空值或非法值一律按缺省 each 处理（F21），规则配置的
-// finish_on 作为 CLI 未显式传入时的默认值。
+// 兜底）；结束事件命令为空表示不执行（无默认动作），CLI 未传时回退规则档位。
 func (p *PomodoroTracker) fillDefaults() {
 	work, short, long, cycle := p.mgr.cfg.PomodoroDefaults()
 
@@ -59,8 +64,11 @@ func (p *PomodoroTracker) fillDefaults() {
 	var rCycle int
 	if r, ok := p.mgr.cfg.Rules[p.opts.Rule]; ok && r.Kind == config.RulePomodoro {
 		rWork, rShort, rLong, rCycle = r.Work, r.ShortBreak, r.LongBreak, r.Cycle
-		if p.opts.FinishOn == "" {
-			p.opts.FinishOn = r.FinishOn
+		if p.opts.FinishEach == "" {
+			p.opts.FinishEach = r.FinishEach
+		}
+		if p.opts.FinishSequence == "" {
+			p.opts.FinishSequence = r.FinishSequence
 		}
 	}
 
@@ -74,9 +82,6 @@ func (p *PomodoroTracker) fillDefaults() {
 		cycle = rCycle
 	}
 	p.opts.Cycle = cycle
-	if p.opts.FinishOn != config.FinishOnSequence {
-		p.opts.FinishOn = config.FinishOnEach
-	}
 }
 
 // firstPositive 返回第一个大于 0 的时长，均为 0 时返回 0。
@@ -126,7 +131,7 @@ func (p *PomodoroTracker) removeCurrentTask() {
 // 三选确认框（F15、4.5 节）；继续→推进到下一阶段，停止→终止整个序列，
 // 暂停、确认超时未响应（或无法弹窗）→静默进入 waiting，等待 tempo pomo next
 // 手动推进，超时不发送通知、不自动继续。
-// finish_command 仍按 FinishOn 语义在阶段结束时调度，与确认流程互不影响。
+// finish_each 结束事件在本回调中异步调度，与确认流程互不影响。
 //
 // 本回调由 time.AfterFunc 触发，必须立即返回：确认弹窗最长阻塞 promptTimeout，
 // 因此放入独立 goroutine 执行，不占用定时器回调线程。
@@ -172,10 +177,8 @@ func (p *PomodoroTracker) onStageComplete(t *Task) {
 		"cycle", p.opts.Cycle,
 		"action", "pomodoro_stage_end")
 
-	if p.opts.FinishOn == config.FinishOnEach {
-		// 异步执行，避免自定义命令阻塞回调（F12）。
-		go p.runFinishCommand(from)
-	}
+	// 每阶段结束事件：异步执行，避免命令阻塞回调（F12）；命令为空时不执行。
+	go p.runFinishEvent(from, finishEventEach, p.opts.FinishEach)
 
 	title, message, fallback := buildPromptText(from, next, p.opts)
 
@@ -372,7 +375,7 @@ func (p *PomodoroTracker) Status() PomodoroState {
 }
 
 // Stop 终止整个序列（F19）：停止并移除当前阶段任务，序列不再推进；
-// FinishOn 为 sequence 时执行一次规则中的 finish_command。
+// 配置了 finish_sequence 结束事件时在此执行一次。
 func (p *PomodoroTracker) Stop() {
 	p.mu.Lock()
 	if p.stopped {
@@ -404,43 +407,32 @@ func (p *PomodoroTracker) Stop() {
 		"cycle", p.opts.Cycle,
 		"action", "pomodoro_stop")
 
-	if p.opts.FinishOn == config.FinishOnSequence {
-		go p.runFinishCommand(phase)
-	}
+	// 整个序列结束事件：序列仅经 Stop 终止，故在此执行一次；命令为空不执行。
+	go p.runFinishEvent(phase, finishEventSequence, p.opts.FinishSequence)
 }
 
-// runFinishCommand 执行规则配置的自定义结束命令（F10）：执行失败仅记日志，
-// 不 panic、不阻塞（F12）；无规则或未配置 finish_command 时空操作。
+// runFinishEvent 执行序列的结束事件命令（finish_each 每阶段结束 / finish_sequence
+// 整个序列结束）：执行失败仅记日志，不 panic、不阻塞（F12）；命令为空时不执行
+// ——结束事件不同于通知，没有默认动作。命令取自 opts（构造时已按规则档位补全）。
 // shell 选择由平台文件决定：Linux sh -c（CONTEXT.md §5.4）/ Windows cmd /c。
-func (p *PomodoroTracker) runFinishCommand(phase string) {
-	cmdText := p.finishCommand()
+func (p *PomodoroTracker) runFinishEvent(phase, event, cmdText string) {
 	if cmdText == "" {
 		return
 	}
 	if _, err := runFinishShellCommand(cmdText); err != nil {
-		p.mgr.logger.Error("执行自定义结束命令失败",
+		p.mgr.logger.Error("执行结束事件命令失败",
 			"task", p.name,
 			"rule", p.opts.Rule,
 			"phase", phase,
-			"action", "finish_command",
+			"event", event,
+			"action", "finish_event",
 			"error", err)
 		return
 	}
-	p.mgr.logger.Info("自定义结束命令已执行",
+	p.mgr.logger.Info("结束事件命令已执行",
 		"task", p.name,
 		"rule", p.opts.Rule,
 		"phase", phase,
-		"action", "finish_command")
-}
-
-// finishCommand 返回序列关联规则配置的 finish_command；无规则或未配置时返回空串。
-// cfg 在 daemon 启动加载后只读，无需加锁访问。
-func (p *PomodoroTracker) finishCommand() string {
-	if p.opts.Rule == "" {
-		return ""
-	}
-	if r, ok := p.mgr.cfg.Rules[p.opts.Rule]; ok {
-		return r.FinishCommand
-	}
-	return ""
+		"event", event,
+		"action", "finish_event")
 }

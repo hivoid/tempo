@@ -94,14 +94,15 @@ tempo version                                 打印版本号
 tempo install-service                         Linux 提示安装 systemd unit；Windows 安装 Service
 tempo uninstall-service                       Linux 提示手动卸载步骤；Windows 卸载 Service
 
-tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish|-f CMD]
+tempo start --name|-n NAME [-t DUR] [--rule|-r RULE] [--finish-notify|-f CMD] [--finish|-F CMD]
 tempo list
 tempo pause NAME
 tempo resume NAME
 tempo stop NAME
 
 tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
-                 [--cycle|-c 4] [--rule|-r RULE] [--finish-on each|sequence]
+                 [--cycle|-c 4] [--rule|-r RULE] [--finish-each|-e CMD]
+                 [--finish-sequence|-S CMD]
 tempo pomo status [NAME]                      等待确认时追加 (waiting)
 tempo pomo next NAME                          推进等待确认的下一阶段
 tempo pomo stop [NAME]
@@ -114,10 +115,12 @@ tempo pomo stop [NAME]
 | `--name` / `-n`                                    | 任务名称，后续管理使用，必填                                                       |
 | `-t`                                               | 时长，Go duration 格式，如 `25m`、`1h30m`                                          |
 | `--rule` / `-r`                                    | 引用配置文件中的预置规则                                                           |
-| `--finish` / `-f`                                  | 计时结束时执行的自定义命令，覆盖规则中的 `finish_command`                          |
+| `--finish-notify` / `-f`                           | 计时结束的自定义提醒命令，覆盖规则中的 `finish_notify`；留空使用平台默认通知       |
+| `--finish` / `-F`                                  | 计时结束时执行一次的结束事件命令；留空（默认）不执行                              |
 | `--work` / `-w`、`--short` / `-s`、`--long` / `-l` | 番茄钟各阶段时长                                                                   |
 | `--cycle` / `-c`                                   | 每多少个专注后进入长休，默认 4                                                     |
-| `--finish-on`                                      | 番茄钟自定义命令的执行时机：`each`（每阶段）或 `sequence`（整个序列）；默认 `each` |
+| `--finish-each` / `-e`                             | 每个番茄钟阶段结束时执行的结束事件命令；留空（默认）不执行                        |
+| `--finish-sequence` / `-S`                         | 整个番茄钟序列终止时执行一次的结束事件命令；留空（默认）不执行                    |
 
 ## 配置
 
@@ -146,18 +149,22 @@ cycle = 4
 
 [rules.tea] # 计时规则：含 duration，供 tempo start 使用
 duration = "10m"
+# finish_notify = "..." # 自定义计时结束提醒命令；留空使用平台默认通知
+# finish = "..."        # 计时结束事件命令，计时到点执行一次；留空或 false 不执行
 
 [rules.deep] # 番茄钟规则：含 work/short_break/long_break/cycle 之一，供 tempo pomo start 使用
 work = "50m"
 short_break = "10m"
 long_break = "30m"
 cycle = 2
-finish_command = "notify-send '番茄钟阶段结束'"
-finish_on = "each"
+finish_each = "notify-send '番茄钟阶段结束'" # 每个阶段结束时执行；留空或 false 不执行
+finish_sequence = "backup.sh" # 整个序列终止时执行一次；留空或 false 不执行
 ```
 
-- `finish_command` 为空时使用平台默认提醒。
-- `finish_on` 控制番茄钟中自定义命令在每阶段（`each`）还是整个序列（`sequence`）结束时执行，默认 `each`。
+- 计时规则用 `finish_notify` 自定义结束提醒（留空使用平台默认通知），用 `finish` 追加结束事件——计时到点执行一次的命令。
+- 番茄钟规则改为两个可独立配置的结束事件（不同于通知、没有默认动作）：`finish_each` 在每个阶段结束时执行，`finish_sequence` 在整个序列终止时执行一次；留空或 `false` 均不执行。
+- 旧选项 `finish_on` 与 `finish_command` 键已移除，配置中仍出现（或结束事件键用错规则类型）时会报错并提示迁移。
+- CLI 参数显式传入时覆盖规则配置：`tempo start` 用 `--finish-notify/-f` 与 `--finish/-F`，`tempo pomo start` 用 `--finish-each/-e` 与 `--finish-sequence/-S`。
 - 规则分两类：计时规则（含 `duration`，由 `tempo start --rule` 引用）与番茄钟规则（含 `work`/`short_break`/`long_break`/`cycle` 之一，由 `tempo pomo start --rule` 引用）；两类字段互斥、共用同一命名空间，引用未定义的规则或类型不匹配时返回错误。
 - 番茄钟规则未填写的字段回退到 `[pomodoro]` 全局默认，再回退到内置默认值；CLI 显式参数优先级最高。
 - `log_path` 指定 daemon 日志路径，留空或省略时使用平台默认路径（见[日志](#日志)）。

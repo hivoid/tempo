@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +37,7 @@ func TestListEmpty(t *testing.T) {
 
 func TestStartWithExplicitDuration(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("tea", "", "30s", ""); err != nil {
+	if err := m.Start("tea", "", "30s", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	tasks := m.List()
@@ -55,16 +56,16 @@ func TestStartWithExplicitDuration(t *testing.T) {
 func TestStartValidationErrors(t *testing.T) {
 	m := NewManager(nil, nil, nil)
 
-	if err := m.Start("", "", "10s", ""); err == nil || !strings.Contains(err.Error(), "任务名称不能为空") {
+	if err := m.Start("", "", "10s", "", ""); err == nil || !strings.Contains(err.Error(), "任务名称不能为空") {
 		t.Errorf("空名称应报错，得到: %v", err)
 	}
-	if err := m.Start("bad", "", "abc", ""); err == nil || !strings.Contains(err.Error(), "解析时长") {
+	if err := m.Start("bad", "", "abc", "", ""); err == nil || !strings.Contains(err.Error(), "解析时长") {
 		t.Errorf("非法时长应报错，得到: %v", err)
 	}
-	if err := m.Start("ghost", "no-such-rule", "", ""); err == nil || !strings.Contains(err.Error(), "未定义") {
+	if err := m.Start("ghost", "no-such-rule", "", "", ""); err == nil || !strings.Contains(err.Error(), "未定义") {
 		t.Errorf("未定义规则应报错，得到: %v", err)
 	}
-	if err := m.Start("empty", "", "", ""); err == nil || !strings.Contains(err.Error(), "必须提供有效时长") {
+	if err := m.Start("empty", "", "", "", ""); err == nil || !strings.Contains(err.Error(), "必须提供有效时长") {
 		t.Errorf("无时长且无规则应报错，得到: %v", err)
 	}
 }
@@ -76,7 +77,7 @@ func TestStartUsesRuleDuration(t *testing.T) {
 		},
 	}
 	m := NewManager(cfg, nil, nil)
-	if err := m.Start("tea", "tea", "", ""); err != nil {
+	if err := m.Start("tea", "tea", "", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	tasks := m.List()
@@ -93,20 +94,20 @@ func TestStartUsesRuleDuration(t *testing.T) {
 
 func TestStartRejectsDuplicateName(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("tea", "", "30s", ""); err != nil {
+	if err := m.Start("tea", "", "30s", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := m.Start("tea", "", "30s", ""); err == nil || !strings.Contains(err.Error(), "已存在") {
+	if err := m.Start("tea", "", "30s", "", ""); err == nil || !strings.Contains(err.Error(), "已存在") {
 		t.Errorf("重复名称应报错，得到: %v", err)
 	}
 }
 
 func TestListSortedByName(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("b", "", "10s", ""); err != nil {
+	if err := m.Start("b", "", "10s", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Start("a", "", "10s", ""); err != nil {
+	if err := m.Start("a", "", "10s", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	tasks := m.List()
@@ -117,7 +118,7 @@ func TestListSortedByName(t *testing.T) {
 
 func TestPauseResumeLifecycle(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("tea", "", "10s", ""); err != nil {
+	if err := m.Start("tea", "", "10s", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -143,7 +144,7 @@ func TestPauseResumeLifecycle(t *testing.T) {
 
 func TestStopRemovesTask(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("tea", "", "10s", ""); err != nil {
+	if err := m.Start("tea", "", "10s", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	if err := m.Stop("tea"); err != nil {
@@ -175,7 +176,7 @@ func TestUnknownTaskErrors(t *testing.T) {
 
 func TestTaskRemovedOnFinish(t *testing.T) {
 	m := NewManager(nil, nil, nil)
-	if err := m.Start("flash", "", "30ms", ""); err != nil {
+	if err := m.Start("flash", "", "30ms", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -330,12 +331,12 @@ func TestStartLogsTaskData(t *testing.T) {
 	buf := &syncBuffer{}
 	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
 
-	if err := m.Start("tea", "", "10m", "notify-done"); err != nil {
+	if err := m.Start("tea", "", "10m", "notify-done", "echo synced"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
 	out := buf.String()
-	for _, want := range []string{"task=tea", "duration=10m0s", "finish=notify-done", "action=start"} {
+	for _, want := range []string{"task=tea", "duration=10m0s", "finish_notify=notify-done", "finish_event=echo synced", "action=start"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("启动日志缺少 %q，实际输出：%s", want, out)
 		}
@@ -346,7 +347,7 @@ func TestStartLogsTaskData(t *testing.T) {
 func TestStopLogsTrigger(t *testing.T) {
 	buf := &syncBuffer{}
 	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
-	if err := m.Start("tea", "", "10m", ""); err != nil {
+	if err := m.Start("tea", "", "10m", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	buf.Reset()
@@ -367,7 +368,7 @@ func TestStopLogsTrigger(t *testing.T) {
 func TestFinishLogsTrigger(t *testing.T) {
 	buf := &syncBuffer{}
 	m := NewManager(&config.Config{}, nil, newRecordingLogger(buf))
-	if err := m.Start("tea", "", "10ms", ""); err != nil {
+	if err := m.Start("tea", "", "10ms", "", ""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -383,4 +384,16 @@ func TestFinishLogsTrigger(t *testing.T) {
 			t.Errorf("结束日志缺少 %q，实际输出：%s", want, out)
 		}
 	}
+}
+
+// TestTimerFinishEventRuns 验证计时结束事件（--finish / 规则 finish）在计时到点
+// 时执行一次，且不影响默认提醒路径。
+func TestTimerFinishEventRuns(t *testing.T) {
+	flagFile := filepath.Join(t.TempDir(), "timer-event")
+	m := NewManager(&config.Config{}, nil, nil)
+	if err := m.Start("flash", "", "30ms", "", "touch "+flagFile); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	waitForFile(t, flagFile, 2*time.Second)
 }

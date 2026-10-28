@@ -52,8 +52,9 @@ func NewManager(cfg *config.Config, notifier notify.Notifier, logger *slog.Logge
 
 // Start 创建并启动一个计时任务。
 // duration 为空时回退到规则 rule 的时长，两者均为空则报错；
-// finishCmd 优先级：显式传入 > 规则 finish_command > 平台默认提醒（PRD F11）。
-func (m *Manager) Start(name, rule, duration, finishCmd string) error {
+// finishNotify（结束提醒）优先级：显式传入 > 规则 finish_notify > 平台默认通知
+// （PRD F11）；finishEvent（结束事件）优先级：显式传入 > 规则 finish，为空不执行。
+func (m *Manager) Start(name, rule, duration, finishNotify, finishEvent string) error {
 	if name == "" {
 		return errors.New("任务名称不能为空")
 	}
@@ -67,7 +68,7 @@ func (m *Manager) Start(name, rule, duration, finishCmd string) error {
 		d = parsed
 	}
 
-	ruleFinishCmd := ""
+	var ruleFinishNotify, ruleFinishEvent string
 	if rule != "" {
 		r, ok := m.cfg.Rules[rule]
 		if !ok {
@@ -79,13 +80,17 @@ func (m *Manager) Start(name, rule, duration, finishCmd string) error {
 		if d == 0 {
 			d = r.Duration
 		}
-		ruleFinishCmd = r.FinishCommand
+		ruleFinishNotify = r.FinishNotify
+		ruleFinishEvent = r.Finish
 	}
 	if d <= 0 {
 		return fmt.Errorf("任务 %s: 必须提供有效时长或含有效时长的规则", name)
 	}
-	if finishCmd == "" {
-		finishCmd = ruleFinishCmd
+	if finishNotify == "" {
+		finishNotify = ruleFinishNotify
+	}
+	if finishEvent == "" {
+		finishEvent = ruleFinishEvent
 	}
 
 	m.mu.Lock()
@@ -95,19 +100,21 @@ func (m *Manager) Start(name, rule, duration, finishCmd string) error {
 	}
 	// 在持锁状态下创建并注册：若时长极短导致计时器立即到点，
 	// onTaskFinish 须等锁释放后才能执行，避免插入一个已结束的任务。
-	t := newTask(name, rule, finishCmd, d, m.onTaskFinish)
+	t := newTask(name, rule, finishNotify, finishEvent, d, m.onTaskFinish)
 	m.tasks[name] = t
 	m.mu.Unlock()
 
-	m.logger.Info("任务已创建", "task", name, "rule", rule, "duration", d, "finish", finishCmd, "action", "start")
+	m.logger.Info("任务已创建", "task", name, "rule", rule, "duration", d,
+		"finish_notify", finishNotify, "finish_event", finishEvent, "action", "start")
 	return nil
 }
 
-// onTaskFinish 是任务计时到点的结束回调：从注册表移除任务并执行结束提醒，
-// 由 Task.fire 在锁外调用。提醒优先级（PRD F11）：配置了自定义结束命令时仅
-// 执行该命令（Linux sh -c / Windows cmd /c，与番茄钟共用 runFinishShellCommand）；
-// 否则弹出与番茄钟阶段结束一致的交互提醒组件，按钮仅一个「知道了」；
-// 无可用交互组件时回退 notifier 纯通知。
+// onTaskFinish 是任务计时到点的结束回调：从注册表移除任务并处理结束动作，
+// 由 Task.fire 在锁外调用。两条路径互不影响：结束事件（finishEvent）配置了
+// 命令时异步执行一次（无默认动作，空则跳过）；结束提醒（finishNotify）配置了
+// 命令时仅执行该命令（Linux sh -c / Windows cmd /c，与番茄钟结束事件共用
+// runFinishShellCommand），否则弹出与番茄钟阶段结束一致的交互提醒组件
+//（按钮仅一个「知道了」），无可用交互组件时回退 notifier 纯通知。
 func (m *Manager) onTaskFinish(t *Task) {
 	m.mu.Lock()
 	delete(m.tasks, t.name)
@@ -115,9 +122,20 @@ func (m *Manager) onTaskFinish(t *Task) {
 
 	m.logger.Info("任务计时结束", "task", t.name, "rule", t.rule, "trigger", "timer", "action", "finish")
 
-	if t.finishCmd != "" {
-		if _, err := runFinishShellCommand(t.finishCmd); err != nil {
-			m.logger.Error("执行自定义结束命令失败", "task", t.name, "error", err)
+	if t.finishEvent != "" {
+		// 结束事件异步执行，不阻塞提醒路径；失败仅记日志（F12）。
+		go func() {
+			if _, err := runFinishShellCommand(t.finishEvent); err != nil {
+				m.logger.Error("执行结束事件命令失败", "task", t.name, "event", "finish", "action", "finish_event", "error", err)
+				return
+			}
+			m.logger.Info("结束事件命令已执行", "task", t.name, "event", "finish", "action", "finish_event")
+		}()
+	}
+
+	if t.finishNotify != "" {
+		if _, err := runFinishShellCommand(t.finishNotify); err != nil {
+			m.logger.Error("执行自定义结束提醒命令失败", "task", t.name, "error", err)
 		}
 		return
 	}
@@ -251,16 +269,17 @@ func (m *Manager) unregisterTask(name string) {
 	m.mu.Unlock()
 }
 
-// PomodoroOptions 描述番茄钟序列参数。零值字段与 FinishOn 的缺省值由
-// PomodoroTracker.fillDefaults 在构造时按「显式传入 > 规则档位 > 全局
-// [pomodoro] 配置 > PRD 默认值」补全。
+// PomodoroOptions 描述番茄钟序列参数。零值时长字段由 PomodoroTracker.fillDefaults
+// 在构造时按「显式传入（CLI）> 规则档位 > 全局 [pomodoro] 配置 > PRD 默认值」
+// 补全；结束事件命令为空表示不执行（无默认动作），CLI 未传时回退规则配置。
 type PomodoroOptions struct {
-	Work       time.Duration // 专注时长
-	ShortBreak time.Duration // 短休时长
-	LongBreak  time.Duration // 长休时长
-	Cycle      int           // 长休前的专注次数
-	Rule       string        // 关联预置番茄钟规则名（Kind==RulePomodoro），提供时长档位与 finish 默认值
-	FinishOn   string        // "each" | "sequence"，控制自定义命令执行时机；空值回退规则配置
+	Work           time.Duration // 专注时长
+	ShortBreak     time.Duration // 短休时长
+	LongBreak      time.Duration // 长休时长
+	Cycle          int           // 长休前的专注次数
+	Rule           string        // 关联预置番茄钟规则名（Kind==RulePomodoro），提供时长档位与结束事件默认值
+	FinishEach     string        // 每阶段结束事件命令；空 = 不执行
+	FinishSequence string        // 整个序列结束事件命令（序列终止时执行一次）；空 = 不执行
 }
 
 // PomodoroStart 启动番茄钟序列，自动在专注/短休/长休间切换（PRD F15）。
@@ -272,7 +291,7 @@ func (m *Manager) PomodoroStart(name string, opts PomodoroOptions) error {
 		return errors.New("番茄钟名称不能为空")
 	}
 	// 规则校验须在创建 tracker 之前完成：newPomodoroTracker 不返回错误，其
-	// fillDefaults 依赖规则为已定义的番茄钟类型（时长档位与 finish_on 默认值）。
+	// fillDefaults 依赖规则为已定义的番茄钟类型（时长档位与结束事件默认值）。
 	if opts.Rule != "" {
 		r, ok := m.cfg.Rules[opts.Rule]
 		if !ok {

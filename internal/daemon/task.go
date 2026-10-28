@@ -32,9 +32,10 @@ func (s TaskState) String() string {
 type Task struct {
 	mu sync.Mutex
 
-	name      string
-	rule      string
-	finishCmd string
+	name         string
+	rule         string
+	finishNotify string // 计时结束提醒命令，空时由 Manager 走平台默认通知
+	finishEvent  string // 计时结束事件命令，空 = 不执行
 
 	deadline  time.Time     // 运行中的截止时刻
 	remaining time.Duration // 暂停时保留的剩余时长
@@ -46,14 +47,15 @@ type Task struct {
 	onFinish func(*Task)
 }
 
-// newTask 创建并立即启动一个计时任务。d 到期时调用 onFinish，
-// 结束行为（平台默认提醒/自定义命令/番茄钟下一阶段）由注入方决定，
-// Task 自身不执行通知。onFinish 为必需回调。
-func newTask(name, rule, finishCmd string, d time.Duration, onFinish func(*Task)) *Task {
+// newTask 创建并立即启动一个计时任务。d 到点时调用 onFinish，结束行为（通知、
+// 结束事件、番茄钟下一阶段）由注入方决定，Task 自身不执行任何动作。
+// onFinish 为必需回调。
+func newTask(name, rule, finishNotify, finishEvent string, d time.Duration, onFinish func(*Task)) *Task {
 	t := &Task{
-		name:      name,
-		rule:      rule,
-		finishCmd: finishCmd,
+		name:         name,
+		rule:         rule,
+		finishNotify: finishNotify,
+		finishEvent:  finishEvent,
 		deadline:  time.Now().Add(d),
 		remaining: d,
 		state:     StateRunning,
