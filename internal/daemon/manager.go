@@ -24,11 +24,11 @@ import (
 type Manager struct {
 	mu sync.Mutex
 
-	cfg        *config.Config
-	notifier   notify.Notifier
-	logger     *slog.Logger
-	tasks      map[string]*Task
-	pomodoros  map[string]*PomodoroTracker
+	cfg       *config.Config
+	notifier  notify.Notifier
+	logger    *slog.Logger
+	tasks     map[string]*Task
+	pomodoros map[string]*PomodoroTracker
 }
 
 // NewManager 创建任务管理器。cfg、notifier、logger 由调用方注入：
