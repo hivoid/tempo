@@ -13,7 +13,7 @@ Supported platforms: **Linux** (verified on Arch Linux + Plasma 6) and **Windows
 - **CLI management**: start, pause, resume, list, and stop — all from the command line
 - **Precise pause/resume**: pausing preserves the remaining time; resuming continues from it without resetting
 - **Detached from the terminal**: managed by a systemd user service on Linux and a Windows Service on Windows — no `nohup`
-- **Rule configuration**: preset timer and Pomodoro rules in TOML, referenced at runtime with `--rule`
+- **Rule configuration**: TOML preset rules acting as parameter presets — any subset of task name, durations, and finish events — referenced at runtime with `--rule`
 - **Custom finish notification and events**: timer completion pops a reminder by default, replaceable with any command; finish events additionally run commands on timer completion, at every Pomodoro phase end, and on sequence stop
 - **Native Pomodoro**: work / short break / long break cycling with configurable parameters; each phase end pops a Continue / Stop / Pause dialog, with manual advance supported
 - **Structured logging**: standard library `log/slog`, written to both console and file with configurable path
@@ -112,7 +112,7 @@ tempo pomo stop [NAME]
 
 | Option                                             | Description                                                                                                |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--name` / `-n`                                    | Task name, used for later management; required                                                             |
+| `--name` / `-n`                                    | Task name, used for later management; optional when the referenced rule presets `name`                      |
 | `-t`                                               | Duration in Go duration format, e.g. `25m`, `1h30m`                                                        |
 | `--rule` / `-r`                                    | Reference a preset rule from the config file                                                               |
 | `--finish-notify` / `-f`                           | Custom notification command on completion; overrides the rule's `finish_notify`; empty uses the platform default |
@@ -147,25 +147,30 @@ short_break = "5m"
 long_break = "15m"
 cycle = 4
 
-[rules.tea] # timer rule: has duration, for `tempo start`
+[rules.tea] # timer rule: any subset of duration/finish_notify/finish, for `tempo start`
 duration = "10m"
 # finish_notify = "..." # custom finish notification command; empty uses the platform default
 # finish = "..."        # finish-event command run once when the timer completes; empty or false runs nothing
+# name = "..."          # preset task name, adopted when --name/-n is omitted
 
-[rules.deep] # Pomodoro rule: has work/short_break/long_break/cycle, for `tempo pomo start`
+[rules.deep] # Pomodoro rule: any subset of work/short_break/long_break/cycle/finish_each/finish_sequence, for `tempo pomo start`
 work = "50m"
 short_break = "10m"
 long_break = "30m"
 cycle = 2
 finish_each = "paplay /usr/share/sounds/freedesktop/stereo/complete.oga" # finish event at every phase end; empty or false runs nothing
 finish_sequence = "backup.sh" # finish event run once when the sequence is stopped; empty or false runs nothing
+
+[rules.standup] # generic rule: name only, usable by both `tempo start` and `tempo pomo start`
+name = "standup"
 ```
 
 - Timer rules customize the finish reminder with `finish_notify` (empty: platform default reminder) and may add a finish event with `finish` — a command run once when the timer completes.
 - Pomodoro rules instead have two independently configurable finish events, distinct from reminders and without a default action: `finish_each` runs at the end of every phase and `finish_sequence` runs once when the sequence is stopped; an empty value or `false` runs nothing.
 - The old `finish_on` option and `finish_command` key have been removed; a config still containing them (or finish-event keys in the wrong rule kind) is rejected with a migration hint.
 - CLI flags override rule presets: `--finish-notify/-f` and `--finish/-F` for `tempo start`, `--finish-each/-e` and `--finish-sequence/-S` for `tempo pomo start`.
-- Rules are either timer rules (with `duration`, referenced by `tempo start --rule`) or Pomodoro rules (with any of `work`/`short_break`/`long_break`/`cycle`, referenced by `tempo pomo start --rule`); the two kinds are mutually exclusive and share a single namespace. Referencing an undefined rule or a rule of the wrong kind returns an error.
+- Rules are parameter presets rather than complete definitions: any subset of fields may be configured. They come in three kinds sharing a single namespace — timer rules (any combination of `duration`/`finish_notify`/`finish`, referenced by `tempo start --rule`), Pomodoro rules (any combination of `work`/`short_break`/`long_break`/`cycle`/`finish_each`/`finish_sequence`, referenced by `tempo pomo start --rule`), and generic rules (`name` only, referenced by both commands). Mixing timer and Pomodoro fields, referencing an undefined rule, or referencing a rule of the wrong kind returns an error.
+- Rules may also preset the task `name`, adopted when `--name/-n` is omitted; an explicit `--name/-n` wins. Required parameters still missing after the rule is applied — e.g. a timer rule without `duration` started without `-t` — are rejected with an error naming the flag to pass, and a rule with no effective parameter at all is rejected when the config is loaded.
 - Unset fields of a Pomodoro rule fall back to the `[pomodoro]` section, then to built-in defaults; explicit CLI flags take precedence over both.
 - `log_path` sets the daemon log file path; empty or omitted uses the platform default (see [Logging](#logging)).
 
