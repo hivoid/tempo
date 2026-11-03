@@ -246,14 +246,14 @@ finish = 42
 }
 
 func TestLoadTimerRuleRejectsFinishEvents(t *testing.T) {
-	// finish_each/finish_sequence 仅用于番茄钟规则，计时规则中出现即报错。
+	// finish_each/finish_sequence 属番茄钟字段，与计时字段混用即报类型冲突。
 	path := writeConfig(t, `
 [rules.bad]
 duration = "10m"
 finish_each = "echo hi"
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "计时规则不支持") {
-		t.Errorf("计时规则中的番茄钟结束事件应报错，得到: %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "不能同时配置") {
+		t.Errorf("计时规则中的番茄钟结束事件应报类型冲突，得到: %v", err)
 	}
 }
 
@@ -322,12 +322,20 @@ work = "50m"
 }
 
 func TestLoadRuleMissingFields(t *testing.T) {
+	// 旧键 finish_command 在类型判别前统一拦截；完全未定义任何参数的规则报错。
 	path := writeConfig(t, `
 [rules.empty]
 finish_command = "echo hi"
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "缺少 duration") {
-		t.Errorf("未配置任何时长字段的规则应报错，得到: %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "finish_command 已移除") {
+		t.Errorf("旧键 finish_command 应报错提示迁移，得到: %v", err)
+	}
+
+	path = writeConfig(t, `
+[rules.empty]
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "缺少可定义的参数") {
+		t.Errorf("未定义任何参数的规则应报错，得到: %v", err)
 	}
 }
 
@@ -348,5 +356,146 @@ cycle = -1
 `)
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "cycle 不能为负") {
 		t.Errorf("负数 cycle 应报错，得到: %v", err)
+	}
+}
+
+func TestLoadTimerFinishEventOnlyRule(t *testing.T) {
+	// 仅定义结束提醒/结束事件的计时规则：duration 留空为 0，时长由命令行 -t 补充。
+	path := writeConfig(t, `
+[rules.hook]
+finish = "echo done"
+finish_notify = "notify-send hi"
+
+[rules.notify_only]
+finish_notify = "notify-send hi"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	hook := cfg.Rules["hook"]
+	if hook.Kind != RuleTimer || hook.Duration != 0 {
+		t.Errorf("hook = (%v, %v), want (RuleTimer, 0)", hook.Kind, hook.Duration)
+	}
+	if hook.Finish != "echo done" || hook.FinishNotify != "notify-send hi" {
+		t.Errorf("hook 结束字段 = (%q, %q)", hook.Finish, hook.FinishNotify)
+	}
+	notifyOnly := cfg.Rules["notify_only"]
+	if notifyOnly.Kind != RuleTimer || notifyOnly.Duration != 0 || notifyOnly.FinishNotify != "notify-send hi" {
+		t.Errorf("notify_only = %+v", notifyOnly)
+	}
+}
+
+func TestLoadPomodoroFinishEventOnlyRule(t *testing.T) {
+	// 仅定义结束事件的番茄钟规则：时长全部为 0，由 fillDefaults 按全局默认补全。
+	path := writeConfig(t, `
+[rules.pomo_hook]
+finish_each = "echo stage"
+finish_sequence = false
+
+[rules.named]
+name = "专注"
+finish_each = "echo stage"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	hook := cfg.Rules["pomo_hook"]
+	if hook.Kind != RulePomodoro {
+		t.Errorf("pomo_hook.Kind = %v, want RulePomodoro", hook.Kind)
+	}
+	if hook.Work != 0 || hook.ShortBreak != 0 || hook.LongBreak != 0 || hook.Cycle != 0 {
+		t.Errorf("pomo_hook 时长字段应全部为 0: %+v", hook)
+	}
+	if hook.FinishEach != "echo stage" || hook.FinishSequence != "" {
+		t.Errorf("pomo_hook 结束事件 = (%q, %q)", hook.FinishEach, hook.FinishSequence)
+	}
+	named := cfg.Rules["named"]
+	if named.Kind != RulePomodoro || named.Name != "专注" || named.FinishEach != "echo stage" {
+		t.Errorf("named = %+v", named)
+	}
+}
+
+func TestLoadGenericNameOnlyRule(t *testing.T) {
+	// 仅定义 name 的通用规则：可被计时与番茄钟命令共同引用。
+	path := writeConfig(t, `
+[rules.standup]
+name = "站会"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rule := cfg.Rules["standup"]
+	if rule.Kind != RuleGeneric {
+		t.Errorf("standup.Kind = %v, want RuleGeneric", rule.Kind)
+	}
+	if rule.Name != "站会" {
+		t.Errorf("standup.Name = %q", rule.Name)
+	}
+	if rule.Duration != 0 || rule.Work != 0 || rule.Finish != "" || rule.FinishEach != "" {
+		t.Errorf("standup 其余字段应为零值: %+v", rule)
+	}
+}
+
+func TestLoadRuleWithName(t *testing.T) {
+	// name 可与计时/番茄钟字段共存，不参与类型判别。
+	path := writeConfig(t, `
+[rules.a]
+name = "茶歇"
+duration = "10m"
+finish = "echo hi"
+
+[rules.b]
+name = "深 work"
+work = "50m"
+cycle = 2
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	a := cfg.Rules["a"]
+	if a.Kind != RuleTimer || a.Name != "茶歇" || a.Duration != 10*time.Minute {
+		t.Errorf("a = %+v", a)
+	}
+	b := cfg.Rules["b"]
+	if b.Kind != RulePomodoro || b.Name != "深 work" || b.Work != 50*time.Minute || b.Cycle != 2 {
+		t.Errorf("b = %+v", b)
+	}
+}
+
+func TestLoadRuleTypeConflictFinishEvents(t *testing.T) {
+	// 计时与番茄钟的结束事件字段同样互斥。
+	path := writeConfig(t, `
+[rules.bad]
+finish = "echo hi"
+finish_each = "echo stage"
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "不能同时配置") {
+		t.Errorf("计时与番茄钟结束事件混用应报错，得到: %v", err)
+	}
+}
+
+func TestLoadTimerRuleWithoutEffectiveParams(t *testing.T) {
+	// finish = false 仅显式禁用结束事件，规则因此不含任何有效计时参数，报错。
+	path := writeConfig(t, `
+[rules.bad]
+finish = false
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "未定义有效的计时参数") {
+		t.Errorf("无有效计时参数的规则应报错，得到: %v", err)
+	}
+}
+
+func TestLoadPomodoroRuleWithoutEffectiveParams(t *testing.T) {
+	// finish_each = false 仅显式禁用结束事件，规则因此不含任何有效番茄钟参数，报错。
+	path := writeConfig(t, `
+[rules.bad]
+finish_each = false
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "未定义有效的番茄钟参数") {
+		t.Errorf("无有效番茄钟参数的规则应报错，得到: %v", err)
 	}
 }

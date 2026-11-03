@@ -41,6 +41,10 @@ const usage = `tempo — CLI 计时器
   tempo pomo status [NAME]                      查看当前阶段与周期进度
   tempo pomo next NAME                          推进等待确认的下一阶段
   tempo pomo stop [NAME]                        终止番茄钟序列
+
+预置规则（tempo.toml 的 [rules.NAME]）可预设上述任意参数：任务名、时长档位与
+结束事件等；命令行显式传参优先生效，引用规则后仍缺失的必填参数（如计时时长）
+报错提示。
 `
 
 // serviceName 是系统服务的注册名，安装与运行必须使用同一名称。
@@ -190,8 +194,8 @@ func runStart(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if name == "" {
-		return fmt.Errorf("start: 必须通过 --name/-n 指定任务名称")
+	if name == "" && rule == "" {
+		return fmt.Errorf("start: 必须通过 --name/-n 指定任务名称，或通过 --rule/-r 引用预置规则（规则可预设 name）")
 	}
 
 	return callAndReport(protocol.Request{
@@ -297,8 +301,8 @@ func runPomodoroStart(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if name == "" {
-		return fmt.Errorf("pomo start: 必须通过 --name/-n 指定番茄钟名称")
+	if name == "" && rule == "" {
+		return fmt.Errorf("pomo start: 必须通过 --name/-n 指定番茄钟名称，或通过 --rule/-r 引用预置规则（规则可预设 name）")
 	}
 
 	return callAndReport(protocol.Request{

@@ -51,12 +51,32 @@ func NewManager(cfg *config.Config, notifier notify.Notifier, logger *slog.Logge
 }
 
 // Start 创建并启动一个计时任务。
-// duration 为空时回退到规则 rule 的时长，两者均为空则报错；
-// finishNotify（结束提醒）优先级：显式传入 > 规则 finish_notify > 平台默认通知
-// （PRD F11）；finishEvent（结束事件）优先级：显式传入 > 规则 finish，为空不执行。
+// 规则 rule 是参数预设：name 为空时回退规则预设名（config.Rule.Name），duration
+// 为空时回退规则 duration，回退后仍缺失则报错；finishNotify（结束提醒）优先级：
+// 显式传入 > 规则 finish_notify > 平台默认通知（PRD F11）；finishEvent（结束
+// 事件）优先级：显式传入 > 规则 finish，为空不执行。
 func (m *Manager) Start(name, rule, duration, finishNotify, finishEvent string) error {
+	// 规则预设先于名称/时长校验应用：仅定义结束事件甚至仅定义 name 的规则依赖
+	// 命令行补齐对应参数，完整性在全部回退完成后统一判断。
+	var ruleDuration time.Duration
+	var ruleFinishNotify, ruleFinishEvent string
+	if rule != "" {
+		r, ok := m.cfg.Rules[rule]
+		if !ok {
+			return fmt.Errorf("规则 %q 未定义", rule)
+		}
+		if r.Kind == config.RulePomodoro {
+			return fmt.Errorf("规则 %q 是番茄钟规则，不能用于计时任务", rule)
+		}
+		if name == "" {
+			name = r.Name
+		}
+		ruleDuration = r.Duration
+		ruleFinishNotify = r.FinishNotify
+		ruleFinishEvent = r.Finish
+	}
 	if name == "" {
-		return errors.New("任务名称不能为空")
+		return errors.New("任务名称不能为空：请通过 --name/-n 指定，或在规则中配置 name")
 	}
 
 	var d time.Duration
@@ -67,24 +87,17 @@ func (m *Manager) Start(name, rule, duration, finishNotify, finishEvent string) 
 		}
 		d = parsed
 	}
-
-	var ruleFinishNotify, ruleFinishEvent string
-	if rule != "" {
-		r, ok := m.cfg.Rules[rule]
-		if !ok {
-			return fmt.Errorf("任务 %s: 规则 %q 未定义", name, rule)
-		}
-		if r.Kind == config.RulePomodoro {
-			return fmt.Errorf("任务 %s: 规则 %q 是番茄钟规则，不能用于计时任务", name, rule)
-		}
-		if d == 0 {
-			d = r.Duration
-		}
-		ruleFinishNotify = r.FinishNotify
-		ruleFinishEvent = r.Finish
+	if d == 0 {
+		d = ruleDuration
 	}
 	if d <= 0 {
-		return fmt.Errorf("任务 %s: 必须提供有效时长或含有效时长的规则", name)
+		if duration != "" {
+			return fmt.Errorf("任务 %s: 时长 %q 必须为正", name, duration)
+		}
+		if rule != "" {
+			return fmt.Errorf("任务 %s: 规则 %q 未定义时长，请通过 -t 指定", name, rule)
+		}
+		return errors.New("必须提供任务时长：通过 -t 指定，或使用含 duration 的预置规则")
 	}
 	if finishNotify == "" {
 		finishNotify = ruleFinishNotify
@@ -277,29 +290,34 @@ type PomodoroOptions struct {
 	ShortBreak     time.Duration // 短休时长
 	LongBreak      time.Duration // 长休时长
 	Cycle          int           // 长休前的专注次数
-	Rule           string        // 关联预置番茄钟规则名（Kind==RulePomodoro），提供时长档位与结束事件默认值
+	Rule           string        // 关联预置规则名（Kind 为 RulePomodoro 或仅含 name 的 RuleGeneric），提供时长档位与结束事件默认值
 	FinishEach     string        // 每阶段结束事件命令；空 = 不执行
 	FinishSequence string        // 整个序列结束事件命令（序列终止时执行一次）；空 = 不执行
 }
 
 // PomodoroStart 启动番茄钟序列，自动在专注/短休/长休间切换（PRD F15）。
 // 序列名同时作为各阶段任务名注册到 tasks，用户可直接对当前阶段执行
-// pause/resume/stop（F20）；与已有任务或番茄钟重名、或 Rule 关联的预置规则
-// 未定义/非番茄钟类型时返回错误。
+// pause/resume/stop（F20）；name 为空时回退规则预设名（config.Rule.Name），仍为
+// 空则报错。与已有任务或番茄钟重名、或 Rule 关联的预置规则未定义/为计时类型时
+// 返回错误；仅含 name 的通用规则可引用，时长与结束事件全部走默认补全。
 func (m *Manager) PomodoroStart(name string, opts PomodoroOptions) error {
-	if name == "" {
-		return errors.New("番茄钟名称不能为空")
-	}
 	// 规则校验须在创建 tracker 之前完成：newPomodoroTracker 不返回错误，其
-	// fillDefaults 依赖规则为已定义的番茄钟类型（时长档位与结束事件默认值）。
+	// fillDefaults 依赖规则为已定义的番茄钟类型（时长档位与结束事件默认值）；
+	// 通用规则不含任何番茄钟字段，tracker 按「无规则」路径回退全局默认。
 	if opts.Rule != "" {
 		r, ok := m.cfg.Rules[opts.Rule]
 		if !ok {
-			return fmt.Errorf("番茄钟 %s: 规则 %q 未定义", name, opts.Rule)
+			return fmt.Errorf("规则 %q 未定义", opts.Rule)
 		}
-		if r.Kind != config.RulePomodoro {
-			return fmt.Errorf("番茄钟 %s: 规则 %q 是计时规则，不能用于番茄钟", name, opts.Rule)
+		if r.Kind == config.RuleTimer {
+			return fmt.Errorf("规则 %q 是计时规则，不能用于番茄钟", opts.Rule)
 		}
+		if name == "" {
+			name = r.Name
+		}
+	}
+	if name == "" {
+		return errors.New("番茄钟名称不能为空：请通过 --name/-n 指定，或在规则中配置 name")
 	}
 
 	m.mu.Lock()
