@@ -65,8 +65,12 @@ func TestStartValidationErrors(t *testing.T) {
 	if err := m.Start("ghost", "no-such-rule", "", "", ""); err == nil || !strings.Contains(err.Error(), "未定义") {
 		t.Errorf("未定义规则应报错，得到: %v", err)
 	}
-	if err := m.Start("empty", "", "", "", ""); err == nil || !strings.Contains(err.Error(), "必须提供有效时长") {
+	if err := m.Start("empty", "", "", "", ""); err == nil || !strings.Contains(err.Error(), "必须提供任务时长") {
 		t.Errorf("无时长且无规则应报错，得到: %v", err)
+	}
+	// 显式传入非正时长应报错，而非被规则回退逻辑吞掉。
+	if err := m.Start("neg", "", "-5m", "", ""); err == nil || !strings.Contains(err.Error(), "必须为正") {
+		t.Errorf("非正时长应报错，得到: %v", err)
 	}
 }
 
@@ -398,4 +402,188 @@ func TestTimerFinishEventRuns(t *testing.T) {
 	}
 
 	waitForFile(t, flagFile, 2*time.Second)
+}
+
+// TestStartAppliesRulePresetName 验证规则预设的 name 在命令未显式传入时生效，
+// 显式传入的名称优先于规则预设名。
+func TestStartAppliesRulePresetName(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"tea": {Kind: config.RuleTimer, Name: "泡茶", Duration: 10 * time.Minute},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+
+	// 未显式传入名称：采用规则预设名。
+	if err := m.Start("", "tea", "", "", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if tasks := m.List(); len(tasks) != 1 || tasks[0].Name != "泡茶" {
+		t.Fatalf("规则预设名应生效: %+v", tasks)
+	}
+	if err := m.Stop("泡茶"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// 显式传入名称：优先于规则预设名。
+	if err := m.Start("tea2", "tea", "", "", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if tasks := m.List(); len(tasks) != 1 || tasks[0].Name != "tea2" {
+		t.Fatalf("显式名称应优先于规则预设名: %+v", tasks)
+	}
+	t.Cleanup(func() { _ = m.Stop("tea2") })
+}
+
+// TestStartFinishEventOnlyRuleRequiresDuration 验证仅定义结束事件的规则在命令
+// 未传 -t 时报错并提示指定时长。
+func TestStartFinishEventOnlyRuleRequiresDuration(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"hook": {Kind: config.RuleTimer, Finish: "echo done"},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+	if err := m.Start("job", "hook", "", "", ""); err == nil || !strings.Contains(err.Error(), "-t") {
+		t.Errorf("仅结束事件规则缺 -t 应报错提示指定时长，得到: %v", err)
+	}
+}
+
+// TestStartFinishEventOnlyRuleWithDuration 验证仅定义结束事件的规则配合 -t 使用：
+// 启动成功，且规则的结束事件在计时到点执行。
+func TestStartFinishEventOnlyRuleWithDuration(t *testing.T) {
+	flagFile := filepath.Join(t.TempDir(), "rule-finish-event")
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"hook": {Kind: config.RuleTimer, Finish: "touch " + flagFile},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+	if err := m.Start("job", "hook", "30ms", "", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForFile(t, flagFile, 2*time.Second)
+}
+
+// TestStartFinishNotifyPriority 验证结束提醒命令的优先级：显式传入 > 规则
+// finish_notify > 平台默认通知。
+func TestStartFinishNotifyPriority(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"hook": {Kind: config.RuleTimer, FinishNotify: "rule-notify"},
+		},
+	}
+
+	// CLI 未传：采用规则 finish_notify。
+	buf := &syncBuffer{}
+	m := NewManager(cfg, nil, newRecordingLogger(buf))
+	if err := m.Start("tea", "hook", "10m", "", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if out := buf.String(); !strings.Contains(out, "finish_notify=rule-notify") {
+		t.Errorf("规则 finish_notify 应生效，实际输出：%s", out)
+	}
+	if err := m.Stop("tea"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// CLI 显式传入：优先于规则 finish_notify。
+	buf.Reset()
+	if err := m.Start("tea2", "hook", "10m", "cli-notify", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop("tea2") })
+	if out := buf.String(); !strings.Contains(out, "finish_notify=cli-notify") {
+		t.Errorf("显式传参应优先于规则 finish_notify，实际输出：%s", out)
+	}
+}
+
+// TestPomodoroStartAppliesRulePresetName 验证番茄钟规则预设的 name 在命令未显式
+// 传入时生效；仅定义结束事件的规则时长回退内置默认值。
+func TestPomodoroStartAppliesRulePresetName(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"hook": {Kind: config.RulePomodoro, Name: "专注", FinishEach: "echo stage"},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+	t.Cleanup(func() { _ = m.PomodoroStop("专注") })
+
+	if err := m.PomodoroStart("", PomodoroOptions{Rule: "hook"}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
+	}
+	waitForTasks(t, m, 1, time.Second)
+	if tasks := m.List(); tasks[0].Name != "专注" || tasks[0].Rule != "hook" {
+		t.Errorf("阶段任务应以规则预设名注册: %+v", tasks)
+	}
+	info, err := m.PomodoroStatus("专注")
+	if err != nil {
+		t.Fatalf("PomodoroStatus: %v", err)
+	}
+	if info.Phase != phaseWork || info.Cycle != 4 {
+		t.Errorf("仅定义结束事件的规则时长应回退内置默认值: %+v", info)
+	}
+}
+
+// TestPomodoroStartExplicitNameOverridesRule 验证显式传入的名称优先于规则预设名。
+func TestPomodoroStartExplicitNameOverridesRule(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"hook": {Kind: config.RulePomodoro, Name: "专注"},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+	t.Cleanup(func() { _ = m.PomodoroStop("focus") })
+
+	if err := m.PomodoroStart("focus", PomodoroOptions{Rule: "hook"}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
+	}
+	if tasks := m.List(); len(tasks) != 1 || tasks[0].Name != "focus" {
+		t.Errorf("显式名称应优先于规则预设名: %+v", tasks)
+	}
+}
+
+// TestPomodoroStartRejectsTimerRule 验证计时规则不能用于番茄钟。
+func TestPomodoroStartRejectsTimerRule(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"tea": {Kind: config.RuleTimer, Duration: 10 * time.Minute},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+	if err := m.PomodoroStart("focus", PomodoroOptions{Rule: "tea"}); err == nil || !strings.Contains(err.Error(), "计时规则") {
+		t.Errorf("计时规则应被番茄钟拒绝，得到: %v", err)
+	}
+}
+
+// TestGenericRuleUsableByBothCommands 验证仅含 name 的通用规则可同时被计时与
+// 番茄钟命令引用。
+func TestGenericRuleUsableByBothCommands(t *testing.T) {
+	cfg := &config.Config{
+		Rules: map[string]config.Rule{
+			"standup": {Kind: config.RuleGeneric, Name: "站会"},
+		},
+	}
+	m := NewManager(cfg, nil, nil)
+
+	// 计时：名称取规则预设，时长仍须由命令行补齐。
+	if err := m.Start("", "standup", "30m", "", ""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if tasks := m.List(); len(tasks) != 1 || tasks[0].Name != "站会" {
+		t.Fatalf("计时应采用通用规则预设名: %+v", tasks)
+	}
+	if err := m.Stop("站会"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// 番茄钟：时长全部走默认补全。
+	if err := m.PomodoroStart("", PomodoroOptions{Rule: "standup"}); err != nil {
+		t.Fatalf("PomodoroStart: %v", err)
+	}
+	t.Cleanup(func() { _ = m.PomodoroStop("站会") })
+	waitForTasks(t, m, 1, time.Second)
+	if tasks := m.List(); tasks[0].Name != "站会" {
+		t.Errorf("番茄钟应采用通用规则预设名: %+v", tasks)
+	}
 }

@@ -134,12 +134,10 @@ func dispatch(m *Manager, req protocol.Request) protocol.Response {
 }
 
 // dispatchStart 处理 start 请求：从 Args 读取 rule/duration/finish_notify/finish
-// 启动计时任务。finish_notify 为结束提醒命令（空回退规则与平台默认通知），
-// finish 为结束事件命令（空不执行）。
+// 启动计时任务。Name 允许为空：引用预置规则时由 Manager.Start 回退规则预设的
+// name，回退后仍为空才报错。finish_notify 为结束提醒命令（空回退规则与平台
+// 默认通知），finish 为结束事件命令（空不执行）。
 func dispatchStart(m *Manager, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return errResponse("任务名称不能为空")
-	}
 	rule := req.Args["rule"]
 	duration := req.Args["duration"]
 	finishNotify := req.Args["finish_notify"]
@@ -153,13 +151,11 @@ func dispatchStart(m *Manager, req protocol.Request) protocol.Response {
 }
 
 // dispatchPomodoroStart 处理 pomodoro_start 请求：从 Args 读取 work/short/long/cycle/
-// rule/finish_each/finish_sequence 构造 PomodoroOptions。时长与 cycle 留空表示未
-// 设置，由 daemon 按 [pomodoro] 配置与内置默认值补全；提供但解析失败时返回错误；
-// 结束事件留空表示不执行，CLI 未传时回退规则配置。
+// rule/finish_each/finish_sequence 构造 PomodoroOptions。Name 允许为空：引用预置
+// 规则时由 Manager.PomodoroStart 回退规则预设的 name，回退后仍为空才报错。
+// 时长与 cycle 留空表示未设置，由 daemon 按 [pomodoro] 配置与内置默认值补全；
+// 提供但解析失败时返回错误；结束事件留空表示不执行，CLI 未传时回退规则配置。
 func dispatchPomodoroStart(m *Manager, req protocol.Request) protocol.Response {
-	if req.Name == "" {
-		return errResponse("番茄钟名称不能为空")
-	}
 	args := req.Args
 
 	opts := PomodoroOptions{

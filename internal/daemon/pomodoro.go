@@ -58,8 +58,9 @@ func newPomodoroTracker(name string, opts PomodoroOptions, mgr *Manager) *Pomodo
 func (p *PomodoroTracker) fillDefaults() {
 	work, short, long, cycle := p.mgr.cfg.PomodoroDefaults()
 
-	// 调用前 Manager.PomodoroStart 已校验规则存在且为番茄钟类型；此处对规则
-	// 缺失或类型不符按无规则档位处理，保持构造路径健壮。
+	// 调用前 Manager.PomodoroStart 已校验规则存在且为番茄钟或通用类型；此处对
+	// 规则缺失或类型不符（含仅含 name 的通用规则）按无规则档位处理，保持构造
+	// 路径健壮。
 	var rWork, rShort, rLong time.Duration
 	var rCycle int
 	if r, ok := p.mgr.cfg.Rules[p.opts.Rule]; ok && r.Kind == config.RulePomodoro {
