@@ -128,8 +128,9 @@ func TestDispatchLifecycle(t *testing.T) {
 func TestDispatchErrors(t *testing.T) {
 	m := NewManager(nil, nil, nil)
 
+	// 空名称由 Manager 在规则预设名回退后校验，错误文案含参数指引，用子串匹配。
 	if resp := dispatch(m, protocol.Request{Action: protocol.ActionStart, Name: ""}); resp.OK ||
-		resp.Error != "任务名称不能为空" {
+		!strings.Contains(resp.Error, "任务名称不能为空") {
 		t.Errorf("空名称 start 应失败，得到: %+v", resp)
 	}
 
@@ -188,8 +189,9 @@ func TestDispatchPomodoroLifecycle(t *testing.T) {
 func TestDispatchPomodoroErrors(t *testing.T) {
 	m := NewManager(nil, nil, nil)
 
+	// 空名称由 Manager 在规则预设名回退后校验，错误文案含参数指引，用子串匹配。
 	if resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStart, Name: ""}); resp.OK ||
-		resp.Error != "番茄钟名称不能为空" {
+		!strings.Contains(resp.Error, "番茄钟名称不能为空") {
 		t.Errorf("空名称 pomodoro start 应失败，得到: %+v", resp)
 	}
 
