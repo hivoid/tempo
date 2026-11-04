@@ -158,6 +158,9 @@ func runDaemonCmd(args []string) error {
 func runDaemon(configPath string, stop <-chan struct{}) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
+		// 配置解析失败时日志系统尚未就绪：尽力把原因落到默认日志路径，
+		// 否则 Windows 服务模式下该错误仅到 stderr（由 SCM 接管、无人可见）。
+		logStartupError(err)
 		return err
 	}
 
@@ -169,7 +172,9 @@ func runDaemon(configPath string, stop <-chan struct{}) error {
 	if err != nil {
 		// 用户显式配置的日志路径不可用（无权限、磁盘满等）时直接退出，
 		// 静默回退默认路径会让日志去向难以排查。
-		return fmt.Errorf("初始化日志 %s: %w", logPath, err)
+		initErr := fmt.Errorf("初始化日志 %s: %w", logPath, err)
+		logStartupError(initErr)
+		return initErr
 	}
 	logger.Info("配置已加载", "action", "load_config")
 
@@ -443,4 +448,25 @@ func defaultLogPath() string {
 		return "tempo.log"
 	}
 	return filepath.Join(home, ".local", "state", "tempo", "tempo.log")
+}
+
+// logStartupError 在日志系统尚未就绪时把启动期错误尽力追加写入默认日志路径：
+// Windows 服务模式下进程 stderr 由 SCM 接管、无人可见，磁盘留痕是配置解析失败
+// 等启动期故障唯一可见的证据。仅覆盖 runDaemon 的配置加载与日志初始化失败路径
+//（日志系统就绪后的错误照常经 logger 记录）；统一写默认路径而非配置中的
+// log_path——配置加载失败时该值不可信。写入失败静默放弃，此时已无更优去向。
+func logStartupError(err error) {
+	path := defaultLogPath()
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+		return
+	}
+	f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if openErr != nil {
+		return
+	}
+	// 关闭失败无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = f.Close() }()
+	// 行格式与 slog TextHandler 保持一致，便于与后续日志混排查看。
+	_, _ = fmt.Fprintf(f, "time=%s level=ERROR msg=\"daemon 启动失败\" error=%q\n",
+		time.Now().Format(time.RFC3339), err.Error())
 }

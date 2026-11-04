@@ -15,11 +15,13 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
 // serviceRunner 把 daemon 的 run 生命周期适配为 svc.Handler，由 SCM 启动与停止。
 type serviceRunner struct {
+	name string // 服务名，reportError 上报事件日志用
 	run  func(stop <-chan struct{}) error
 	stop chan struct{} // RunAsService 创建，Execute 收到停止/关机请求时关闭
 }
@@ -36,7 +38,7 @@ func IsWindowsService() (bool, error) {
 // 退出后上报 Stopped。run 须在 stop 关闭后的有限时间内返回，否则 SCM 停止
 // 会一直等待。
 func RunAsService(name string, run func(stop <-chan struct{}) error) error {
-	return svc.Run(name, &serviceRunner{run: run, stop: make(chan struct{})})
+	return svc.Run(name, &serviceRunner{name: name, run: run, stop: make(chan struct{})})
 }
 
 // Execute 实现 svc.Handler：上报启动/运行状态并处理 SCM 控制请求。
@@ -55,6 +57,7 @@ func (s *serviceRunner) Execute(args []string, req <-chan svc.ChangeRequest, sta
 			// run 自行退出（如 IPC 监听失败）：按是否出错上报退出码。
 			status <- svc.Status{State: svc.Stopped}
 			if err != nil {
+				s.reportError(err)
 				return false, 1
 			}
 			return false, 0
@@ -72,6 +75,7 @@ func (s *serviceRunner) Execute(args []string, req <-chan svc.ChangeRequest, sta
 				err := <-done
 				status <- svc.Status{State: svc.Stopped}
 				if err != nil {
+					s.reportError(err)
 					return false, 1
 				}
 				return false, 0
@@ -79,6 +83,27 @@ func (s *serviceRunner) Execute(args []string, req <-chan svc.ChangeRequest, sta
 			// Pause/Continue 未在 Accepts 中声明，不应到达；到达也忽略。
 		}
 	}
+}
+
+// reportError 在 run 以错误退出时把原因写入 Windows 事件日志（应用程序日志）：
+// 服务进程的 stderr 由 SCM 接管、无人可见，事件日志是启动期故障（如配置解析
+// 失败）唯一可见的落点。best-effort：事件源未注册时先注册再重试，任一步失败
+// 即静默放弃——事件日志自身是兜底手段，其失败无法也无须再上报。
+func (s *serviceRunner) reportError(err error) {
+	elog, openErr := eventlog.Open(s.name)
+	if openErr != nil {
+		// 事件源通常随服务安装注册；此处多为未注册，先注册再重试。
+		// 注册失败（含已存在之外的其他错误）不单独区分，以下面的 Open 为准。
+		_ = eventlog.InstallAsEventCreate(s.name,
+			eventlog.Error|eventlog.Warning|eventlog.Info)
+		elog, openErr = eventlog.Open(s.name)
+		if openErr != nil {
+			return
+		}
+	}
+	// Close 失败无法补救，显式忽略以满足 errcheck。
+	defer func() { _ = elog.Close() }()
+	_ = elog.Error(1, fmt.Sprintf("tempo 服务异常退出: %v", err))
 }
 
 // InstallService 安装 Windows 服务：服务启动时执行 exePath（不带参数，
