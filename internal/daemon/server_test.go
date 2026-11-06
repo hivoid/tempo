@@ -146,7 +146,7 @@ func TestDispatchErrors(t *testing.T) {
 }
 
 // TestDispatchPomodoroLifecycle 验证 pomodoro start/status/stop 的分发链路，
-// 含 Name 为空时对唯一活动序列的解析。
+// 含 Name 为空时返回全部序列状态、显式指定名称时返回单条状态。
 func TestDispatchPomodoroLifecycle(t *testing.T) {
 	m := NewManager(nil, nil, nil)
 
@@ -161,23 +161,33 @@ func TestDispatchPomodoroLifecycle(t *testing.T) {
 		t.Fatalf("pomodoro start 失败: %s", resp.Error)
 	}
 
-	// Name 为空时应解析到唯一活动序列。
+	// Name 为空时应返回全部活动序列状态（此处仅一条，按名称排序）。
 	resp := dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus})
-	if !resp.OK || resp.Pomodoro == nil {
+	if !resp.OK || len(resp.Pomodoros) != 1 {
 		t.Fatalf("pomodoro status 响应异常: %+v", resp)
 	}
-	if resp.Pomodoro.Phase != phaseWork || resp.Pomodoro.Completed != 0 || resp.Pomodoro.Cycle != 2 {
-		t.Errorf("PomodoroInfo = %+v, want phase=work completed=0 cycle=2", resp.Pomodoro)
+	info := resp.Pomodoros[0]
+	if info.Name != "focus" {
+		t.Errorf("Pomodoros[0].Name = %q, want focus", info.Name)
+	}
+	if info.Phase != phaseWork || info.Completed != 0 || info.Cycle != 2 {
+		t.Errorf("PomodoroInfo = %+v, want phase=work completed=0 cycle=2", info)
+	}
+
+	// 显式指定名称时应返回单条状态。
+	if resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus, Name: "focus"}); !resp.OK ||
+		resp.Pomodoro == nil || resp.Pomodoro.Name != "focus" {
+		t.Fatalf("指定名称的 pomodoro status 响应异常: %+v", resp)
 	}
 
 	if resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStop}); !resp.OK {
 		t.Fatalf("pomodoro stop 失败: %s", resp.Error)
 	}
 
-	// 无活动番茄钟：status 返回 OK 且无 Pomodoro 字段；stop 报 no active pomodoro。
+	// 无活动番茄钟：status 返回 OK 且空列表；stop 报 no active pomodoro。
 	resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStatus})
-	if !resp.OK || resp.Pomodoro != nil {
-		t.Errorf("无活动番茄钟时 status 应 OK 且无 Pomodoro 字段: %+v", resp)
+	if !resp.OK || len(resp.Pomodoros) != 0 {
+		t.Errorf("无活动番茄钟时 status 应 OK 且返回空列表: %+v", resp)
 	}
 	resp = dispatch(m, protocol.Request{Action: protocol.ActionPomodoroStop})
 	if resp.OK || resp.Error != "no active pomodoro" {
