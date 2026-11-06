@@ -103,7 +103,7 @@ tempo stop NAME
 tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
                  [--cycle|-c 4] [--rule|-r RULE] [--finish-each|-e CMD]
                  [--finish-sequence|-S CMD]
-tempo pomo status [NAME]                      等待确认时追加 (waiting)
+tempo pomo status [NAME]                      省略 NAME 显示全部序列；等待确认时追加 (waiting)
 tempo pomo next NAME                          推进等待确认的下一阶段
 tempo pomo stop [NAME]
 ```
@@ -218,7 +218,7 @@ tempo pomo start --name focus --work 30m --short 5m --long 20m --cycle 3
 
 # 或引用番茄钟预置规则（见配置一节）
 tempo pomo start --name writing -r deep
-tempo pomo status
+tempo pomo status    # 省略名称：列出全部活动序列
 tempo pomo next focus
 tempo pomo stop
 ```
@@ -233,7 +233,7 @@ tempo pomo stop
 
 确认弹窗的等待时限为 5 分钟：超时未响应时关闭弹窗，序列静默进入等待状态（与选择「暂停」一致，不发送通知、不自动继续），之后用 `tempo pomo next` 推进或 `tempo pomo stop` 终止。Linux 上仅当组件无法运行（如无法连接显示服务）时才回退到下一个组件，未响应不触发回退；Windows 服务模式下消息框到时自动关闭。
 
-`status` 显示当前阶段、已完成专注数和剩余时间；等待确认时追加 `(waiting)`。省略可选的 `NAME` 时作用于唯一活动序列；无活动番茄钟时输出 `no active pomodoro`：
+`status` 显示当前阶段、已完成专注数和剩余时间；等待确认时追加 `(waiting)`。显式指定 `NAME` 时只显示该序列（名称不存在则报错）；省略可选的 `NAME` 时按名称排序逐行列出全部活动序列。无活动番茄钟时输出 `no active pomodoro`：
 
 ```
 name=focus, phase=work, completed=1/4, remaining=0s (waiting)

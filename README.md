@@ -103,7 +103,7 @@ tempo stop NAME
 tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
                  [--cycle|-c 4] [--rule|-r RULE] [--finish-each|-e CMD]
                  [--finish-sequence|-S CMD]
-tempo pomo status [NAME]                      appends (waiting) while waiting for confirmation
+tempo pomo status [NAME]                      omit NAME to list all active sequences; appends (waiting) while waiting for confirmation
 tempo pomo next NAME                          advance the pending next phase
 tempo pomo stop [NAME]
 ```
@@ -218,7 +218,7 @@ tempo pomo start --name focus --work 30m --short 5m --long 20m --cycle 3
 
 # Or reference a Pomodoro rule preset (see Configuration)
 tempo pomo start --name writing -r deep
-tempo pomo status
+tempo pomo status    # no NAME: lists every active sequence
 tempo pomo stop
 ```
 
@@ -232,7 +232,7 @@ When no interactive tool is available (headless environments), a notification is
 
 Dialog waits are capped at 5 minutes: when the deadline passes with no response, the dialog is closed and the sequence silently enters waiting — no notification is sent and nothing auto-continues; advance it later with `tempo pomo next` or terminate it with `tempo pomo stop`. On Linux the fallback chain only moves to the next tool when the current one fails to run (e.g. no display service), not when you simply do not respond; in Windows service mode the message box auto-closes at the deadline.
 
-`status` shows the current phase, completed work count, and remaining time; waiting state appends `(waiting)`. Omit the optional `NAME` to target the only active sequence; when nothing is running it prints `no active pomodoro`:
+`status` shows the current phase, completed work count, and remaining time; waiting state appends `(waiting)`. With an explicit `NAME` only that sequence is shown (unknown names return an error); omit the optional `NAME` to list every active sequence, one per line, sorted by name. When nothing is running it prints `no active pomodoro`:
 
 ```
 name=focus, phase=work, completed=1/4, remaining=0s (waiting)
