@@ -361,6 +361,27 @@ func (m *Manager) PomodoroStatus(name string) (*PomodoroState, error) {
 	return &state, nil
 }
 
+// PomodoroStatuses 返回所有活动番茄钟的领域状态，按名称排序。供 IPC 层在 CLI
+// 未指定名称时返回全部序列状态；与 PomodoroStatus 一样遵循「持 m.mu 拷贝
+// tracker 指针 → 解锁 → 再调用对象方法」的锁顺序约定（见 Manager 文档）。
+func (m *Manager) PomodoroStatuses() []*PomodoroState {
+	m.mu.Lock()
+	trackers := make([]*PomodoroTracker, 0, len(m.pomodoros))
+	for _, p := range m.pomodoros {
+		trackers = append(trackers, p)
+	}
+	m.mu.Unlock()
+
+	sort.Slice(trackers, func(i, j int) bool { return trackers[i].name < trackers[j].name })
+
+	states := make([]*PomodoroState, 0, len(trackers))
+	for _, p := range trackers {
+		state := p.Status()
+		states = append(states, &state)
+	}
+	return states
+}
+
 // PomodoroStop 终止整个番茄钟序列并停止当前阶段任务（PRD F19），是序列停止的
 // 唯一入口：IPC 层的 pomodoro_stop 与 tracker 确认弹窗的停止路径（requestStop）
 // 共用，不再单设 StopPomodoroInternal。短暂持 m.mu 查删 m.pomodoros 条目，

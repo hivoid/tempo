@@ -38,7 +38,7 @@ const usage = `tempo — CLI 计时器
   tempo pomo start --name|-n NAME [--work|-w 25m] [--short|-s 5m] [--long|-l 15m]
                     [--cycle|-c 4] [--rule|-r RULE] [--finish-each|-e CMD]
                     [--finish-sequence|-S CMD]
-  tempo pomo status [NAME]                      查看当前阶段与周期进度
+  tempo pomo status [NAME]                      查看番茄钟状态，省略 NAME 显示全部序列
   tempo pomo next NAME                          推进等待确认的下一阶段
   tempo pomo stop [NAME]                        终止番茄钟序列
 
@@ -325,9 +325,10 @@ func runPomodoroStart(args []string) error {
 	})
 }
 
-// runPomodoroStatus 查询番茄钟状态。可选位置参数 NAME 指定序列；省略时由 daemon
-// 解析唯一活动序列，无活动番茄钟时输出 no active pomodoro，命中时输出
-// name=NAME, phase=..., completed=N/M, remaining=DUR。
+// runPomodoroStatus 查询番茄钟状态。可选位置参数 NAME 指定序列，输出该序列的
+// name=NAME, phase=..., completed=N/M, remaining=DUR；省略 NAME 时由 daemon 返回
+// 全部活动序列的状态并逐行输出（按名称排序），无活动番茄钟时输出 no active
+// pomodoro。
 func runPomodoroStatus(args []string) error {
 	fs := flag.NewFlagSet("pomo status", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
@@ -347,19 +348,31 @@ func runPomodoroStatus(args []string) error {
 	if !resp.OK {
 		return fmt.Errorf("%s", resp.Error)
 	}
-	if resp.Pomodoro == nil {
+	if resp.Pomodoro != nil {
+		// 显式指定名称：输出单条状态。
+		fmt.Println(formatPomodoroStatus(resp.Pomodoro))
+		return nil
+	}
+	if len(resp.Pomodoros) == 0 {
 		fmt.Println("no active pomodoro")
 		return nil
 	}
-	p := resp.Pomodoro
+	// 未指定名称：逐行输出全部活动序列状态（daemon 已按名称排序）。
+	for i := range resp.Pomodoros {
+		fmt.Println(formatPomodoroStatus(&resp.Pomodoros[i]))
+	}
+	return nil
+}
+
+// formatPomodoroStatus 将单条番茄钟状态格式化为一行；waiting 后缀表示阶段结束
+// 被暂停，需要 tempo pomo next 手动推进。
+func formatPomodoroStatus(p *protocol.PomodoroInfo) string {
 	suffix := ""
 	if p.Waiting {
-		// 阶段结束被暂停，需要 tempo pomo next 手动推进。
 		suffix = " (waiting)"
 	}
-	fmt.Printf("name=%s, phase=%s, completed=%d/%d, remaining=%s%s\n",
+	return fmt.Sprintf("name=%s, phase=%s, completed=%d/%d, remaining=%s%s",
 		p.Name, p.Phase, p.Completed, p.Cycle, p.Remaining, suffix)
-	return nil
 }
 
 // runPomodoroNext 推进处于 waiting 状态的番茄钟到下一阶段：阶段结束确认被拒绝

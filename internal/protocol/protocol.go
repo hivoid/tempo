@@ -10,10 +10,11 @@ type Request struct {
 
 // Response 是 daemon 返回给 CLI 的一条响应。
 type Response struct {
-	OK       bool          `json:"ok"`
-	Error    string        `json:"error,omitempty"`
-	Tasks    []TaskInfo    `json:"tasks,omitempty"`
-	Pomodoro *PomodoroInfo `json:"pomodoro,omitempty"`
+	OK        bool           `json:"ok"`
+	Error     string         `json:"error,omitempty"`
+	Tasks     []TaskInfo     `json:"tasks,omitempty"`
+	Pomodoro  *PomodoroInfo  `json:"pomodoro,omitempty"`
+	Pomodoros []PomodoroInfo `json:"pomodoros,omitempty"`
 }
 
 // TaskInfo 描述单个活动任务的对外状态。

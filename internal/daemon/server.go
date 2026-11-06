@@ -184,19 +184,21 @@ func dispatchPomodoroStart(m *Manager, req protocol.Request) protocol.Response {
 	return protocol.Response{OK: true}
 }
 
-// dispatchPomodoroStatus 处理 pomodoro_status 请求：Name 为空时解析唯一活动序列，
-// 无活动番茄钟时返回 OK 且不带 Pomodoro 字段，CLI 据此输出 no active pomodoro。
+// dispatchPomodoroStatus 处理 pomodoro_status 请求：Name 显式指定时返回该序列的
+// 单条状态（不存在报错）；Name 为空时返回所有活动序列的状态列表（按名称排序），
+// 无活动番茄钟时返回 OK 且空列表，CLI 据此输出 no active pomodoro。
 func dispatchPomodoroStatus(m *Manager, req protocol.Request) protocol.Response {
-	name, err := resolvePomodoroName(m, req.Name)
-	if err != nil {
-		return errResponse(err.Error())
+	if req.Name == "" {
+		states := m.PomodoroStatuses()
+		infos := make([]protocol.PomodoroInfo, 0, len(states))
+		for _, s := range states {
+			infos = append(infos, *pomodoroInfo(s))
+		}
+		return protocol.Response{OK: true, Pomodoros: infos}
 	}
-	if name == "" {
-		return protocol.Response{OK: true}
-	}
-	state, err := m.PomodoroStatus(name)
+	state, err := m.PomodoroStatus(req.Name)
 	if err != nil {
-		m.logger.Error("查询番茄钟状态失败", "task", name, "action", "pomodoro_status", "error", err)
+		m.logger.Error("查询番茄钟状态失败", "task", req.Name, "action", "pomodoro_status", "error", err)
 		return errResponse(err.Error())
 	}
 	return protocol.Response{OK: true, Pomodoro: pomodoroInfo(state)}
@@ -234,6 +236,8 @@ func dispatchPomodoroStop(m *Manager, req protocol.Request) protocol.Response {
 
 // resolvePomodoroName 解析目标番茄钟名称：显式指定时原样返回；为空时返回唯一活动
 // 序列的名称，无活动序列返回空串（由调用方决定提示方式），多个活动序列时要求指定。
+// 仅供 pomodoro_stop 等需唯一定位单个序列的操作使用；pomodoro_status 在 Name 为空
+// 时改为返回全部序列状态，不再经此解析。
 func resolvePomodoroName(m *Manager, name string) (string, error) {
 	if name != "" {
 		return name, nil
